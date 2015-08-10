@@ -101,7 +101,8 @@ class POP3Server:
 			num = num_copy
 			if num > 100 and not self.errors:
 				for m in xrange(101, num+1):
-					self.pop.dele(m)
+					#self.pop.dele(m)
+					pass
 
 		except Exception, e:
 			if self.has_login_limit_exceeded(e):

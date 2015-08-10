@@ -9,7 +9,6 @@ frappe.views.ListFactory = frappe.views.Factory.extend({
 	make: function(route) {
 		var me = this,
 			doctype = route[1];
-
 		frappe.model.with_doctype(doctype, function() {
 			if(locals["DocType"][doctype].issingle) {
 				frappe.set_re_route("Form", doctype);
