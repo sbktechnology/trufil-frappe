@@ -70,8 +70,16 @@
    "precision": ""
   }, 
   {
+   "fieldname": "content_full", 
+   "fieldtype": "Text Editor", 
+   "label": "Content", 
+   "permlevel": 0, 
+   "precision": ""
+  }, 
+  {
    "fieldname": "content", 
    "fieldtype": "Text Editor", 
+   "hidden": 1, 
    "label": "Content", 
    "permlevel": 0, 
    "reqd": 0, 
@@ -182,8 +190,8 @@
  "idx": 1, 
  "in_dialog": 0, 
  "issingle": 0, 
- "modified": "2015-03-23 02:33:55.289739", 
- "modified_by": "Administrator", 
+ "modified": "2015-07-10 16:24:23.929081", 
+ "modified_by": "anand.pawar@indictranstech.com", 
  "module": "Core", 
  "name": "Communication", 
  "owner": "Administrator", 
