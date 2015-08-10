@@ -152,7 +152,8 @@ def get_filtered_data(ref_doctype, columns, data):
 
 	if match_filters_per_doctype:
 		for row in data:
-			if shared and row[linked_doctypes[ref_doctype]] in shared:
+			# Why linked_doctypes.get(ref_doctype)? because if column is empty, linked_doctypes[ref_doctype] is removed
+			if linked_doctypes.get(ref_doctype) and shared and row[linked_doctypes[ref_doctype]] in shared:
 				result.append(row)
 
 			elif has_match(row, linked_doctypes, match_filters_per_doctype, ref_doctype, if_owner, columns_dict):
@@ -257,11 +258,13 @@ def get_columns_dict(columns):
 				else:
 					col_dict["fieldtype"] = col[1]
 
-			col_dict["fieldname"] = col[0].lower()
+			col_dict["fieldname"] = frappe.scrub(col[0])
 
 		# dict
 		else:
 			col_dict.update(col)
+			if "fieldname" not in col_dict:
+				col_dict["fieldname"] = frappe.scrub(col_dict["label"])
 
 		columns_dict[idx] = col_dict
 		columns_dict[col_dict["fieldname"]] = col_dict

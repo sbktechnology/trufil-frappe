@@ -161,6 +161,9 @@ class BaseDocument(object):
 		value.parenttype = self.doctype
 		value.parentfield = key
 
+		if value.docstatus is None:
+			value.docstatus = 0
+
 		if not getattr(value, "idx", None):
 			value.idx = len(self.get(key) or []) + 1
 
@@ -174,9 +177,16 @@ class BaseDocument(object):
 		for fieldname in self.meta.get_valid_columns():
 			d[fieldname] = self.get(fieldname)
 
-			if d[fieldname]=="":
-				df = self.meta.get_field(fieldname)
-				if df and df.fieldtype in ("Datetime", "Date"):
+			df = self.meta.get_field(fieldname)
+			if df:
+				if df.fieldtype=="Check" and not isinstance(d[fieldname], int):
+					d[fieldname] = cint(d[fieldname])
+
+				elif df.fieldtype in ("Datetime", "Date") and d[fieldname]=="":
+					d[fieldname] = None
+					
+				elif df.get("unique") and cstr(d[fieldname]).strip()=="":
+					# unique empty field should be set to None
 					d[fieldname] = None
 
 		return d
@@ -253,15 +263,23 @@ class BaseDocument(object):
 					values = ", ".join(["%s"] * len(columns))
 				), d.values())
 		except Exception, e:
-			if e.args[0]==1062 and "PRIMARY" in cstr(e.args[1]):
-				if self.meta.autoname=="hash":
-					# hash collision? try again
-					self.name = None
-					self.db_insert()
-					return
-				type, value, traceback = sys.exc_info()
-				frappe.msgprint(_("Duplicate name {0} {1}").format(self.doctype, self.name))
-				raise frappe.DuplicateEntryError, (self.doctype, self.name, e), traceback
+			if e.args[0]==1062:
+				if "PRIMARY" in cstr(e.args[1]):
+					if self.meta.autoname=="hash":
+						# hash collision? try again
+						self.name = None
+						self.db_insert()
+						return
+						
+					type, value, traceback = sys.exc_info()
+					frappe.msgprint(_("Duplicate name {0} {1}").format(self.doctype, self.name))
+					raise frappe.DuplicateEntryError, (self.doctype, self.name, e), traceback
+				
+				elif "Duplicate" in cstr(e.args[1]):
+					# unique constraint
+					self.show_unique_validation_message(e)
+				else:
+					raise
 			else:
 				raise
 
@@ -281,13 +299,17 @@ class BaseDocument(object):
 					values = ", ".join(["`"+c+"`=%s" for c in columns])
 				), d.values() + [d.get("name")])
 		except Exception, e:
-			if e.args[0]==1062:
-				type, value, traceback = sys.exc_info()
-				fieldname = str(e).split("'")[-2]
-				frappe.msgprint(_("{0} must be unique".format(self.meta.get_label(fieldname))))
-				raise frappe.ValidationError, (self.doctype, self.name, e), traceback
+			if e.args[0]==1062 and "Duplicate" in cstr(e.args[1]):
+				self.show_unique_validation_message(e)
 			else:
 				raise
+				
+	def show_unique_validation_message(self, e):
+		type, value, traceback = sys.exc_info()
+		fieldname = str(e).split("'")[-2]
+		label = fieldname if fieldname.startswith("unique_") else self.meta.get_label(fieldname)
+		frappe.msgprint(_("{0} must be unique".format(label)))
+		raise frappe.UniqueValidationError, (self.doctype, self.name, e), traceback
 
 	def db_set(self, fieldname, value, update_modified=True):
 		self.set(fieldname, value)
