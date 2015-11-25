@@ -47,8 +47,14 @@ frappe.ui.form.Control = Class.extend({
 	// as strings based on permissions
 	get_status: function(explain) {
 		if(!this.doctype && !this.docname) {
+			if (cint(this.df.hidden)) {
+				if(explain) console.log("By Hidden: None");
+				return "None";
+			}
+
 			return "Write";
 		}
+
 		var status = frappe.perm.get_field_display_status(this.df,
 			frappe.model.get_doc(this.doctype, this.docname), this.perm || (this.frm && this.frm.perm), explain);
 
@@ -119,6 +125,16 @@ frappe.ui.form.ControlHTML = frappe.ui.form.Control.extend({
 	},
 	html: function(html) {
 		this.$wrapper.html(html || this.get_content());
+	},
+	set_value: function(html) {
+		if(html.appendTo) {
+			// jquery object
+			html.appendTo(this.$wrapper.empty());
+		} else {
+			// html
+			this.df.options = html;
+			this.html(html);
+		}
 	}
 });
 
@@ -180,6 +196,12 @@ frappe.ui.form.ControlInput = frappe.ui.form.Control.extend({
 			</div>').appendTo(this.parent);
 		}
 	},
+	toggle_label: function(show) {
+		this.$wrapper.find(".control-label").toggleClass("hide", !show);
+	},
+	toggle_description: function(show) {
+		this.$wrapper.find(".help-box").toggleClass("hide", !show);
+	},
 	set_input_areas: function() {
 		if(this.only_input) {
 			this.input_area = this.wrapper;
@@ -236,6 +258,7 @@ frappe.ui.form.ControlInput = frappe.ui.form.Control.extend({
 				me.set_description();
 				me.set_label();
 				me.set_mandatory(me.value);
+				me.set_bold();
 			}
 			return false;
 		});
@@ -296,12 +319,6 @@ frappe.ui.form.ControlInput = frappe.ui.form.Control.extend({
 		if(this.only_input || this.df.label==this._label)
 			return;
 
-		// var icon = frappe.ui.form.fieldtype_icons[this.df.fieldtype];
-		// if(this.df.fieldtype==="Link") {
-		// 	icon = frappe.boot.doctype_icons[this.df.options];
-		// } else if(this.df.link_doctype) {
-		// 	icon = frappe.boot.doctype_icons[this.df.link_doctype];
-		// }
 		var icon = "";
 		this.label_span.innerHTML = (icon ? '<i class="'+icon+'"></i> ' : "") +
 			__(this.df.label)  || "&nbsp;";
@@ -323,6 +340,14 @@ frappe.ui.form.ControlInput = frappe.ui.form.Control.extend({
 	set_mandatory: function(value) {
 		this.$wrapper.toggleClass("has-error", (this.df.reqd && is_null(value)) ? true : false);
 	},
+	set_bold: function() {
+		if(this.$input) {
+			this.$input.toggleClass("bold", !!this.df.bold);
+		}
+		if(this.disp_area) {
+			$(this.disp_area).toggleClass("bold", !!this.df.bold);
+		}
+	}
 });
 
 frappe.ui.form.ControlData = frappe.ui.form.ControlInput.extend({
@@ -333,6 +358,11 @@ frappe.ui.form.ControlData = frappe.ui.form.ControlInput.extend({
 			.attr("type", this.input_type)
 			.addClass("input-with-feedback form-control")
 			.prependTo(this.input_area)
+
+		if (in_list(['Data', 'Link', 'Dynamic Link', 'Password', 'Select', 'Read Only', 'Attach', 'Attach Image'],
+			this.df.fieldtype)) {
+				this.$input.attr("maxlength", this.df.length || 140);
+		}
 
 		this.set_input_attributes();
 		this.input = this.$input.get(0);
@@ -629,7 +659,7 @@ frappe.ui.form.ControlCheck = frappe.ui.form.ControlData.extend({
 frappe.ui.form.ControlButton = frappe.ui.form.ControlData.extend({
 	make_input: function() {
 		var me = this;
-		this.$input = $('<button class="btn btn-default btn-sm">')
+		this.$input = $('<button class="btn btn-default btn-xs">')
 			.prependTo(me.input_area)
 			.on("click", function() {
 				me.onclick();
@@ -637,7 +667,7 @@ frappe.ui.form.ControlButton = frappe.ui.form.ControlData.extend({
 		this.input = this.$input.get(0);
 		this.set_input_attributes();
 		this.has_input = true;
-		this.$wrapper.find(".control-label").addClass("hide");
+		this.toggle_label(false);
 	},
 	onclick: function() {
 		if(this.frm && this.frm.doc) {
@@ -846,15 +876,20 @@ frappe.ui.form.ControlAttachImage = frappe.ui.form.ControlAttach.extend({
 		this.img.on("click", function() { me.$input.click(); });
 
 		this.$wrapper.on("refresh", function() {
-			if(me.get_value()) {
-				$(me.input_area).find(".missing-image").toggle(false);
-				me.img.attr("src", me.dataurl ? me.dataurl : me.value).toggle(true);
-			} else {
-				$(me.input_area).find(".missing-image").toggle(true);
-				me.img.toggle(false);
-			}
+			me.set_image();
 		});
+		
+		this.set_image();
 	},
+	set_image: function() {
+		if(this.get_value()) {
+			$(this.input_area).find(".missing-image").toggle(false);
+			this.img.attr("src", this.dataurl ? this.dataurl : this.value).toggle(true);
+		} else {
+			$(this.input_area).find(".missing-image").toggle(true);
+			this.img.toggle(false);
+		}
+	}
 });
 
 
@@ -1128,7 +1163,7 @@ frappe.ui.form.ControlLink = frappe.ui.form.ControlData.extend({
 		var set_nulls = function(obj) {
 			$.each(obj, function(key, value) {
 				if(value!==undefined) {
-					obj[key] = value || null;
+					obj[key] = value;
 				}
 			});
 			return obj;
@@ -1136,7 +1171,13 @@ frappe.ui.form.ControlLink = frappe.ui.form.ControlData.extend({
 		if(this.get_query || this.df.get_query) {
 			var get_query = this.get_query || this.df.get_query;
 			if($.isPlainObject(get_query)) {
-				$.extend(args, set_nulls(get_query));
+				var filters = set_nulls(get_query);
+
+				// extend args for custom functions
+				$.extend(args, filters);
+
+				// add "filters" for standard query (search.py)
+				args.filters = filters;
 			} else if(typeof(get_query)==="string") {
 				args.query = get_query;
 			} else {
@@ -1148,7 +1189,11 @@ frappe.ui.form.ControlLink = frappe.ui.form.ControlData.extend({
 					if(q.filters) {
 						set_nulls(q.filters);
 					}
+					// extend args for custom functions
 					$.extend(args, q);
+
+					// add "filters" for standard query (search.py)
+					args.filters = q.filters;
 				}
 			}
 		}
@@ -1197,7 +1242,7 @@ frappe.ui.form.ControlTextEditor = frappe.ui.form.ControlCode.extend({
 	editor_name: "bsEditor",
 	horizontal: false,
 	make_input: function() {
-		$(this.input_area).css({"min-height":"360px"});
+		//$(this.input_area).css({"min-height":"360px"});
 		this.has_input = true;
 		this.make_rich_text_editor();
 		this.make_markdown_editor();
@@ -1226,10 +1271,7 @@ frappe.ui.form.ControlTextEditor = frappe.ui.form.ControlCode.extend({
 		var me = this;
 		this.md_editor_wrapper = $("<div class='hide'>")
 			.appendTo(this.input_area);
-		this.md_editor = $("<textarea class='form-control'>").css({
-			"height": "451px",
-			"font-family": "Monaco, \"Courier New\", monospace"
-		})
+		this.md_editor = $("<textarea class='form-control markdown-text-editor'>")
 		.appendTo(this.md_editor_wrapper)
 		.allowTabs()
 		.on("change", function() {

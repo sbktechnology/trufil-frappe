@@ -2,26 +2,27 @@
 # MIT License. See license.txt
 from __future__ import unicode_literals
 
-import sys, os
-import json
-import logging
+import os
 import MySQLdb
 
-from werkzeug.wrappers import Request, Response
+from werkzeug.wrappers import Request
 from werkzeug.local import LocalManager
 from werkzeug.exceptions import HTTPException, NotFound
 from werkzeug.contrib.profiler import ProfilerMiddleware
 from werkzeug.wsgi import SharedDataMiddleware
+from werkzeug.serving import run_with_reloader
 
-import mimetypes
+
 import frappe
 import frappe.handler
 import frappe.auth
 import frappe.api
+import frappe.async
 import frappe.utils.response
 import frappe.website.render
-from frappe.utils import get_site_name
+from frappe.utils import get_site_name, get_site_path
 from frappe.middlewares import StaticDataMiddleware
+
 
 local_manager = LocalManager([frappe.local])
 
@@ -29,6 +30,21 @@ _site = None
 _sites_path = os.environ.get("SITES_PATH", ".")
 
 logger = frappe.get_logger()
+
+class RequestContext(object):
+
+	def __init__(self, environ):
+		self.request = Request(environ)
+
+	def __enter__(self):
+		frappe.local.request = self.request
+		init_site(self.request)
+		make_form_dict(self.request)
+		frappe.local.http_request = frappe.auth.HTTPRequest()
+
+	def __exit__(self, type, value, traceback):
+		frappe.destroy()
+
 
 @Request.application
 def application(request):
@@ -83,8 +99,12 @@ def application(request):
 		if frappe.local.is_ajax or 'application/json' in request.headers.get('Accept', ''):
 			response = frappe.utils.response.report_error(http_status_code)
 		else:
+			traceback = "<pre>"+frappe.get_traceback()+"</pre>"
+			if frappe.local.flags.disable_traceback:
+				traceback = ""
+
 			frappe.respond_as_web_page("Server Error",
-				"<pre>"+frappe.get_traceback()+"</pre>",
+				traceback,
 				http_status_code=http_status_code)
 			response = frappe.website.render.render("message", http_status_code=http_status_code)
 
@@ -97,14 +117,19 @@ def application(request):
 
 	else:
 		if frappe.local.request.method in ("POST", "PUT") and frappe.db:
-			frappe.db.commit()
-			rollback = False
+			if frappe.db.transaction_writes:
+				frappe.db.commit()
+				rollback = False
 
 		# update session
 		if getattr(frappe.local, "session_obj", None):
 			updated_in_db = frappe.local.session_obj.update()
 			if updated_in_db:
 				frappe.db.commit()
+
+		# publish realtime
+		for args in frappe.local.realtime_log:
+			frappe.async.emit_via_redis(*args)
 
 	finally:
 		if frappe.local.request.method in ("POST", "PUT") and frappe.db and rollback:
@@ -135,6 +160,8 @@ def make_form_dict(request):
 		frappe.local.form_dict.pop("_")
 
 application = local_manager.make_middleware(application)
+application.debug = True
+
 
 def serve(port=8000, profile=False, site=None, sites_path='.'):
 	global application, _site, _sites_path
@@ -154,6 +181,11 @@ def serve(port=8000, profile=False, site=None, sites_path='.'):
 		application = StaticDataMiddleware(application, {
 			b'/files': os.path.abspath(sites_path).encode("utf-8")
 		})
+
+	application.debug = True
+	application.config = {
+		'SERVER_NAME': 'localhost:8000'
+	}
 
 	run_simple('0.0.0.0', int(port), application, use_reloader=True,
 		use_debugger=True, use_evalex=True, threaded=True)

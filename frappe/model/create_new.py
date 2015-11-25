@@ -57,15 +57,19 @@ def set_user_and_static_default_values(doc):
 				doc.set(df.fieldname, user_default_value)
 
 			else:
-				static_default_value = get_static_default_value(df, user_permissions)
-				if static_default_value is not None:
-					doc.set(df.fieldname, static_default_value)
+				if df.fieldname != doc.meta.title_field:
+					static_default_value = get_static_default_value(df, user_permissions)
+					if static_default_value is not None:
+						doc.set(df.fieldname, static_default_value)
 
 def get_user_default_value(df, defaults, user_permissions):
 	# don't set defaults for "User" link field using User Permissions!
 	if df.fieldtype == "Link" and df.options != "User":
-		# 1 - look in user permissions
-		if user_permissions_exist(df, user_permissions) and len(user_permissions[df.options])==1:
+		# 1 - look in user permissions only for document_type==Setup
+		# We don't want to include permissions of transactions to be used for defaults.
+		if (frappe.get_meta(df.options).document_type=="Setup"
+			and user_permissions_exist(df, user_permissions)
+			and len(user_permissions[df.options])==1):
 			return user_permissions[df.options][0]
 
 		# 2 - Look in user defaults

@@ -11,9 +11,11 @@ from frappe.utils.jinja import render_template
 from frappe.email.smtp import SMTPServer
 from frappe.email.receive import POP3Server, Email
 from poplib import error_proto
-import markdown2, re
+import re
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, timedelta
+
+class SentEmailInInbox(Exception): pass
 
 class EmailAccount(Document):
 	def autoname(self):
@@ -52,6 +54,8 @@ class EmailAccount(Document):
 				self.check_smtp()
 
 		if self.notify_if_unreplied:
+			if not self.send_notification_to:
+				frappe.throw(_("{0} is mandatory").format(self.meta.get_label("send_notification_to")))
 			for e in self.get_unreplied_notification_emails():
 				validate_email_add(e, True)
 
@@ -126,19 +130,28 @@ class EmailAccount(Document):
 				try:
 					communication = self.insert_communication(raw)
 
+				except SentEmailInInbox:
+					frappe.db.rollback()
+
 				except Exception:
 					frappe.db.rollback()
 					exceptions.append(frappe.get_traceback())
 
 				else:
 					frappe.db.commit()
-					communication.notify(attachments=communication._attachments, except_recipient=True)
+					attachments = [d.file_name for d in communication._attachments]
+					communication.notify(attachments=attachments, fetched_from_email_account=True)
 
 			if exceptions:
 				raise Exception, frappe.as_json(exceptions)
 
 	def insert_communication(self, raw):
 		email = Email(raw)
+
+		if email.from_email == self.email_id:
+			# gmail shows sent emails in inbox
+			# and we don't want emails sent by us to be pulled back into the system again
+			raise SentEmailInInbox
 
 		communication = frappe.get_doc({
 			"doctype": "Communication",
@@ -148,6 +161,7 @@ class EmailAccount(Document):
 			"sender_full_name": email.from_real_name,
 			"sender": email.from_email,
 			"recipients": email.mail.get("To"),
+			"cc": email.mail.get("CC"),
 			"email_account": self.name,
 			"communication_medium": "Email"
 		})
@@ -159,12 +173,21 @@ class EmailAccount(Document):
 		# save attachments
 		communication._attachments = email.save_attachments_in_doc(communication)
 
-		if self.enable_auto_reply and getattr(communication, "is_first", False):
-			self.send_auto_reply(communication, email)
+		# replace inline images
+		dirty = False
+		for file in communication._attachments:
+			if file.name in email.cid_map and email.cid_map[file.name]:
+				dirty = True
+				communication.content = communication.content.replace("cid:{0}".format(email.cid_map[file.name]),
+					file.file_url)
+
+		if dirty:
+			# not sure if using save() will trigger anything
+			communication.db_set("content", communication.content)
 
 		# notify all participants of this thread
-		# convert content to HTML - by default text parts of replies are used.
-		communication.content = markdown2.markdown(communication.content)
+		if self.enable_auto_reply and getattr(communication, "is_first", False):
+			self.send_auto_reply(communication, email)
 
 		return communication
 
@@ -198,6 +221,9 @@ class EmailAccount(Document):
 				if frappe.db.exists("Communication", in_reply_to):
 					parent = frappe.get_doc("Communication", in_reply_to)
 
+					# set in_reply_to of current communication
+					communication.in_reply_to = in_reply_to
+
 					if parent.reference_name:
 						parent = frappe.get_doc(parent.reference_doctype,
 							parent.reference_name)
@@ -227,7 +253,7 @@ class EmailAccount(Document):
 			if parent:
 				parent = frappe.get_doc(self.append_to, parent[0].name)
 
-		if not parent and self.append_to:
+		if not parent and self.append_to and self.append_to!="Communication":
 			# no parent found, but must be tagged
 			# insert parent type doc
 			parent = frappe.new_doc(self.append_to)

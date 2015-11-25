@@ -141,7 +141,7 @@ class User(Document):
 		return frappe.db.sql("""select distinct user.name from tabUserRole user_role, tabUser user
 			where user_role.role='System Manager'
 				and user.docstatus<2
-				and ifnull(user.enabled,0)=1
+				and user.enabled=1
 				and user_role.parent = user.name
 			and user_role.parent not in ('Administrator', %s) limit 1""", (self.name,))
 
@@ -164,7 +164,7 @@ class User(Document):
 		link = get_url("/update-password?key=" + key)
 
 		self.send_login_mail(_("Verify Your Account"), "templates/emails/new_user.html",
-			{"link": link})
+			{"link": link, "site_url": get_url()})
 
 	def send_login_mail(self, subject, template, add_args):
 		"""send mail with login details"""
@@ -397,7 +397,7 @@ def user_query(doctype, txt, searchfield, start, page_len, filters):
 	txt = "%{}%".format(txt)
 	return frappe.db.sql("""select name, concat_ws(' ', first_name, middle_name, last_name)
 		from `tabUser`
-		where ifnull(enabled, 0)=1
+		where enabled=1
 			and docstatus < 2
 			and name not in ({standard_users})
 			and user_type != 'Website User'
@@ -437,7 +437,7 @@ def get_active_users():
 	return frappe.db.sql("""select count(*) from `tabUser`
 		where enabled = 1 and user_type != 'Website User'
 		and name not in ({})
-		and hour(timediff(now(), last_login)) < 72""".format(", ".join(["%s"]*len(STANDARD_USERS))), STANDARD_USERS)[0][0]
+		and hour(timediff(now(), last_active)) < 72""".format(", ".join(["%s"]*len(STANDARD_USERS))), STANDARD_USERS)[0][0]
 
 def get_website_users():
 	"""Returns total no. of website users"""
@@ -448,7 +448,7 @@ def get_active_website_users():
 	"""Returns No. of website users who logged in, in the last 3 days"""
 	return frappe.db.sql("""select count(*) from `tabUser`
 		where enabled = 1 and user_type = 'Website User'
-		and hour(timediff(now(), last_login)) < 72""")[0][0]
+		and hour(timediff(now(), last_active)) < 72""")[0][0]
 
 def get_permission_query_conditions(user):
 	if user=="Administrator":

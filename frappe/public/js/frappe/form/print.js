@@ -17,6 +17,13 @@ frappe.ui.form.PrintPreview = Class.extend({
 		this.wrapper.find(".btn-print-close").click(function() {
 			me.frm.hide_print();
 		});
+		
+		// hide print view on pressing escape, only if there is no focus on any input
+		$(document).on("keydown", function(e) {
+			if (e.which===27 && me.frm && e.target===document.body) {
+				me.frm.hide_print();
+			}
+		});	
 
 		this.print_formats = frappe.meta.get_print_formats(this.frm.meta.name);
 		this.print_letterhead = this.wrapper
@@ -163,7 +170,7 @@ frappe.ui.form.PrintPreview = Class.extend({
 			!this.with_letterhead());
 	},
 	selected_format: function() {
-		return this.print_sel.val();
+		return this.print_sel.val() || this.frm.meta.default_print_format || "Standard";
 	},
 	is_old_style: function(format) {
 		return this.get_print_format(format).print_format_type==="Client";

@@ -35,6 +35,7 @@ $.extend(frappe, {
 			url: "/",
 			data: opts.args,
 			dataType: "json",
+			headers: { "X-Frappe-CSRF-Token": frappe.csrf_token },
 			statusCode: {
 				404: function(xhr) {
 					frappe.msgprint(__("Not found"));
@@ -65,11 +66,6 @@ $.extend(frappe, {
 		}
 
 		if(!opts.args) opts.args = {};
-
-		// get or post?
-		if(!opts.args._type) {
-			opts.args._type = opts.type || "GET";
-		}
 
 		// method
 		if(opts.method) {
@@ -127,6 +123,10 @@ $.extend(frappe, {
 		if(opts.msg && data.message) {
 			$(opts.msg).html(data.message).toggle(true);
 		}
+
+		if(opts.always) {
+			opts.always(data);
+		}
 	},
 	show_message: function(text, icon) {
 		if(!icon) icon="icon-refresh icon-spin";
@@ -177,6 +177,7 @@ $.extend(frappe, {
 	},
 	has_permission: function(doctype, docname, perm_type, callback) {
 		return frappe.call({
+			type: "GET",
 			method: "frappe.client.has_permission",
 			no_spinner: true,
 			args: {doctype: doctype, docname: docname, perm_type: perm_type},
@@ -359,6 +360,7 @@ $.extend(frappe, {
 	},
 	page_ready_events: {},
 	ready: function(fn) {
+		// console.log("frappe.ready", frappe.get_pathname());
 		if (!frappe.page_ready_events[frappe.get_pathname()]) {
 			frappe.page_ready_events[frappe.get_pathname()] = []
 		}
@@ -406,6 +408,9 @@ $.extend(frappe, {
 				ready && ready();
 			}
 		}
+
+		// remove them so that they aren't fired again and again!
+		delete frappe.page_ready_events[frappe.get_pathname()];
 	},
 	highlight_code_blocks: function() {
 		if(hljs) {

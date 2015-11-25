@@ -60,6 +60,9 @@ class Meta(Document):
 	def get_link_fields(self):
 		return self.get("fields", {"fieldtype": "Link", "options":["!=", "[Select]"]})
 
+	def get_dynamic_link_fields(self):
+		return self.get("fields", {"fieldtype": "Dynamic Link"})
+
 	def get_select_fields(self):
 		return self.get("fields", {"fieldtype": "Select", "options":["not in",
 			["[Select]", "Loading..."]]})
@@ -319,22 +322,29 @@ def trim_tables():
 		doctype = doctype.name
 		columns = frappe.db.get_table_columns(doctype)
 		fields = [df.fieldname for df in frappe.get_meta(doctype).fields if df.fieldtype not in no_value_fields]
-		columns_to_remove = [f for f in list(set(columns) - set(fields)) if f not in ignore_fields]
+		columns_to_remove = [f for f in list(set(columns) - set(fields)) if f not in ignore_fields
+			and not f.startswith("_")]
 		if columns_to_remove:
+			print doctype, "columns removed:", columns_to_remove
 			columns_to_remove = ", ".join(["drop `{0}`".format(c) for c in columns_to_remove])
 			query = """alter table `tab{doctype}` {columns}""".format(
 				doctype=doctype, columns=columns_to_remove)
 			frappe.db.sql_ddl(query)
 
 def clear_cache(doctype=None):
-	frappe.cache().delete_value("is_table")
-	frappe.cache().delete_value("doctype_modules")
+	cache = frappe.cache()
 
-	groups = ["meta", "form_meta", "table_columns", "last_modified"]
+	cache.delete_value("is_table")
+	cache.delete_value("doctype_modules")
+
+	groups = ["meta", "form_meta", "table_columns", "last_modified", "linked_doctypes"]
 
 	def clear_single(dt):
 		for name in groups:
-			frappe.cache().hdel(name, dt)
+			cache.hdel(name, dt)
+
+		# also clear linked_with list cache
+		cache.delete_keys("user:*:linked_with:{doctype}:".format(doctype=doctype))
 
 	if doctype:
 		clear_single(doctype)
@@ -351,5 +361,5 @@ def clear_cache(doctype=None):
 	else:
 		# clear all
 		for name in groups:
-			frappe.cache().delete_value(name)
+			cache.delete_value(name)
 

@@ -54,6 +54,14 @@ frappe.ui.form.Grid = Class.extend({
 			$rows = $(me.parent).find(".rows"),
 			data = this.get_data();
 
+		if (this.frm && this.frm.docname) {
+			// use doc specific docfield object
+			this.df = frappe.meta.get_docfield(this.frm.doctype, this.df.fieldname, this.frm.docname);
+		} else {
+			// use non-doc specific docfield
+			this.df = frappe.meta.get_docfield(this.df.options, this.df.fieldname);
+		}
+
 		this.docfields = frappe.meta.get_docfields(this.doctype, this.frm.docname);
 		this.display_status = frappe.perm.get_field_display_status(this.df, this.frm.doc,
 			this.perm);
@@ -148,17 +156,20 @@ frappe.ui.form.Grid = Class.extend({
 			var me = this;
 			for(var i=0, l=fieldname.length; i<l; i++) {
 				var fname = fieldname[i];
-				frappe.meta.get_docfield(me.doctype, fname, me.frm.docname).hidden = show ? 0 : 1;
+				me.get_docfield(fname).hidden = show ? 0 : 1;
 			}
 		} else {
-			frappe.meta.get_docfield(this.doctype, fieldname, this.frm.docname).hidden = show ? 0 : 1;
+			this.get_docfield(fieldname).hidden = show ? 0 : 1;
 		}
 
 		this.refresh(true);
 	},
 	toggle_reqd: function(fieldname, reqd) {
-		frappe.meta.get_docfield(this.doctype, fieldname, this.frm.docname).reqd = reqd;
+		this.get_docfield(fieldname).reqd = reqd;
 		this.refresh();
+	},
+	get_docfield: function(fieldname) {
+		return frappe.meta.get_docfield(this.doctype, fieldname, this.frm ? this.frm.docname : null);
 	},
 	get_field: function(fieldname) {
 		// Note: workaround for get_query
@@ -388,7 +399,6 @@ frappe.ui.form.GridRow = Class.extend({
 				.attr("data-fieldname", df.fieldname)
 				.data("df", df)
 				.appendTo(this.row)
-			if(!this.doc) $col.css({"font-weight":"bold"})
 		}
 
 	},
@@ -504,6 +514,7 @@ frappe.ui.form.GridRow = Class.extend({
 		this.wrapper.addClass("grid-row-open");
 		frappe.ui.scroll(this.wrapper, true, 15);
 		me.frm.script_manager.trigger(me.doc.parentfield + "_on_form_rendered");
+		me.frm.script_manager.trigger("form_render", me.doc.doctype, me.doc.name);
 	},
 	hide_form: function() {
 		// if(this.form_panel)
@@ -591,8 +602,8 @@ frappe.ui.form.GridRow = Class.extend({
 	refresh_field: function(fieldname) {
 		var $col = this.row.find("[data-fieldname='"+fieldname+"']");
 		if($col.length) {
-			$col.html(frappe.format(this.doc[fieldname],
-				frappe.meta.get_docfield(this.doc.doctype, fieldname, this.frm.docname), null, this.frm.doc));
+			$col.html(frappe.format(this.doc[fieldname], this.grid.get_docfield(fieldname),
+				null, this.frm.doc));
 		}
 
 		// in form

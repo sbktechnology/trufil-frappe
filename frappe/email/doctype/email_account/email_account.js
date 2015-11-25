@@ -16,12 +16,20 @@ email_defaults = {
 		"use_tls": 1
 	},
 	"Yahoo Mail": {
-		"pop3_server": "pop.mail.yahoo.com ",
+		"pop3_server": "pop.mail.yahoo.com",
 		"use_ssl": 1,
 		"enable_outgoing": 1,
 		"smtp_server": "smtp.mail.yahoo.com",
 		"smtp_port": 465,
 		"use_tls": 1
+	},
+	"Yandex.Mail": {
+		"pop3_server": "pop.yandex.com",
+		"use_ssl": 1,
+		"enable_outgoing": 1,
+		"smtp_server": "smtp.yandex.com",
+		"smtp_port": 465,
+		"use_tls": 0
 	},
 };
 
@@ -41,12 +49,15 @@ frappe.ui.form.on("Email Account", {
 	enable_incoming: function(frm) {
 		frm.set_df_property("append_to", "reqd", frm.doc.enable_incoming);
 	},
+	notify_if_unreplied: function(frm) {
+		frm.set_df_property("send_notification_to", "reqd", frm.doc.notify_if_unreplied);
+	},
 	onload: function(frm) {
 		frm.set_df_property("append_to", "only_select", true);
 		frm.set_query("append_to", "frappe.email.doctype.email_account.email_account.get_append_to");
 	},
 	refresh: function(frm) {
-		frm.set_df_property("append_to", "reqd", frm.doc.enable_incoming);
+		frm.events.enable_incoming(frm);
+		frm.events.notify_if_unreplied(frm);
 	}
 });
-
