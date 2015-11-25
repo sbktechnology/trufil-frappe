@@ -628,15 +628,8 @@
  "in_dialog": 0, 
  "is_submittable": 0, 
  "issingle": 0, 
-<<<<<<< HEAD
  "modified": "2015-07-10 16:24:23.929081", 
  "modified_by": "anand.pawar@indictranstech.com", 
-=======
- "istable": 0, 
- "max_attachments": 0, 
- "modified": "2015-11-16 06:29:43.407180", 
- "modified_by": "Administrator", 
->>>>>>> af2d8c4f397ad0e745f3ef0b4a56f9881a2b6f65
  "module": "Core", 
  "name": "Communication", 
  "owner": "Administrator", 
