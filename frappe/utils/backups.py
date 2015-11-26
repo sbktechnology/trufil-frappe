@@ -41,7 +41,7 @@ class BackupGenerator:
 			last_db, last_file = self.get_recent_backup(older_than)
 		else:
 			last_db, last_file = False, False
-
+			
 		if not (self.backup_path_files and self.backup_path_db):
 			self.set_backup_file_name()
 		if not (last_db and last_file):
@@ -95,7 +95,6 @@ class BackupGenerator:
 			for item in self.__dict__.copy().items())
 		cmd_string = """mysqldump --single-transaction --quick --lock-tables=false -u %(user)s -p%(password)s %(db_name)s -h %(db_host)s | gzip -c > %(backup_path_db)s""" % args
 		err, out = frappe.utils.execute_in_shell(cmd_string)
-		print 'Database backed up', os.path.abspath(self.backup_path_db)
 
 	def send_email(self):
 		"""
@@ -193,6 +192,13 @@ def get_backup_path():
 	return backup_path
 
 #-------------------------------------------------------------------------------
+def backup(with_files=False, backup_path_db=None, backup_path_files=None, quiet=False):
+	"Backup"
+	odb = scheduled_backup(ignore_files=not with_files, backup_path_db=backup_path_db, backup_path_files=backup_path_files, force=True)
+	return {
+		"backup_path_db": odb.backup_path_db,
+		"backup_path_files": odb.backup_path_files
+	}
 
 if __name__ == "__main__":
 	"""
@@ -219,4 +225,3 @@ if __name__ == "__main__":
 
 	if cmd == "delete_temp_backups":
 		delete_temp_backups()
-

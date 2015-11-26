@@ -16,6 +16,7 @@ from frappe.core.doctype.doctype.doctype import validate_fields_for_doctype
 class CustomizeForm(Document):
 	doctype_properties = {
 		'search_fields': 'Data',
+		'title_field': 'Data',
 		'sort_field': 'Data',
 		'sort_order': 'Data',
 		'default_print_format': 'Data',
@@ -38,13 +39,17 @@ class CustomizeForm(Document):
 		'in_filter': 'Check',
 		'in_list_view': 'Check',
 		'hidden': 'Check',
+		'collapsible': 'Check',
+		'collapsible_depends_on': 'Data',
 		'print_hide': 'Check',
 		'report_hide': 'Check',
 		'allow_on_submit': 'Check',
 		'depends_on': 'Data',
 		'description': 'Text',
 		'default': 'Text',
-		'precision': 'Select'
+		'precision': 'Select',
+		'read_only': 'Check',
+		'length': 'Int'
 	}
 
 	allowed_fieldtype_change = (('Currency', 'Float', 'Percent'), ('Small Text', 'Data'),
@@ -134,6 +139,15 @@ class CustomizeForm(Document):
 					elif property == "precision" and cint(df.get("precision")) > 6 \
 							and cint(df.get("precision")) > cint(meta_df[0].get("precision")):
 						update_db = True
+
+					elif property == "unique":
+						update_db = True
+
+					elif (property == "read_only" and cint(df.get("read_only"))==0
+						and frappe.db.get_value("DocField", {"parent": self.doc_type, "fieldname": df.fieldname}, "read_only")==1):
+						# if docfield has read_only checked and user is trying to make it editable, don't allow it
+						frappe.msgprint(_("You cannot unset 'Read Only' for field {0}").format(df.label))
+						continue
 
 					self.make_property_setter(property=property, value=df.get(property),
 						property_type=self.docfield_properties[property], fieldname=df.fieldname)

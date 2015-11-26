@@ -273,7 +273,7 @@ _f.Frm.prototype.rename_notify = function(dt, old, name) {
 		return;
 
 	// cleanup
-	if(this && this.opendocs[old]) {
+	if(this && this.opendocs[old] && frappe.meta.docfield_copy[dt]) {
 		// delete docfield copy
 		frappe.meta.docfield_copy[dt][name] = frappe.meta.docfield_copy[dt][old];
 		delete frappe.meta.docfield_copy[dt][old];
@@ -316,6 +316,8 @@ _f.Frm.prototype.refresh_header = function(is_a_different_doc) {
 
 		this.toolbar.refresh();
 	}
+
+	this.dashboard.reset();
 
 	this.clear_custom_buttons();
 
@@ -391,16 +393,36 @@ _f.Frm.prototype.refresh = function(docname) {
 		// load the record for the first time, if not loaded (call 'onload')
 		cur_frm.cscript.is_onload = false;
 		if(!this.opendocs[this.docname]) {
+			var me = this;
 			cur_frm.cscript.is_onload = true;
 			this.setnewdoc();
+			$(document).trigger("form-load", [this]);
+			$(this.page.wrapper).on('hide',  function(e) {
+				$(document).trigger("form-unload", [me]);
+			});
 		} else {
 			this.render_form(is_a_different_doc);
+			if (this.doc.localname) {
+				// trigger form-rename and remove .localname
+				delete this.doc.localname;
+				$(document).trigger("form-rename", [this]);
+			}
 		}
 
 		// if print format is shown, refresh the format
 		if(this.print_preview.wrapper.is(":visible")) {
 			this.print_preview.preview();
 		}
+
+		this.show_if_needs_refresh();
+	}
+}
+
+_f.Frm.prototype.show_if_needs_refresh = function() {
+	if(this.doc.__needs_refresh) {
+		this.dashboard.set_headline_alert(__("This form has been modified after you have loaded it")
+			+ '<a class="btn btn-xs btn-primary pull-right" onclick="cur_frm.reload_doc()">'
+			+ __("Refresh") + '</a>', "alert-warning");
 	}
 }
 
@@ -423,7 +445,7 @@ _f.Frm.prototype.render_form = function(is_a_different_doc) {
 
 		// trigger global trigger
 		// to use this
-		$(document).trigger('form_refresh');
+		$(document).trigger('form_refresh', [this]);
 
 		// fields
 		this.refresh_fields();
@@ -442,18 +464,20 @@ _f.Frm.prototype.render_form = function(is_a_different_doc) {
 				first.focus();
 			}
 		}
-
 	} else {
 		this.refresh_header(is_a_different_doc);
 	}
 
 	$(cur_frm.wrapper).trigger('render_complete');
 
+	this.layout.show_empty_form_message();
 }
 
 _f.Frm.prototype.refresh_field = function(fname) {
-	cur_frm.fields_dict[fname] && cur_frm.fields_dict[fname].refresh
-		&& cur_frm.fields_dict[fname].refresh();
+	if(cur_frm.fields_dict[fname] && cur_frm.fields_dict[fname].refresh) {
+		cur_frm.fields_dict[fname].refresh();
+		this.layout.refresh_dependency();
+	}
 }
 
 _f.Frm.prototype.refresh_fields = function() {
@@ -516,9 +540,28 @@ _f.Frm.prototype.setnewdoc = function() {
 
 			frappe.route_options = null;
 		}
+
+		frappe.after_ajax(function() {
+			me.trigger_link_fields();
+		});
+
 		frappe.breadcrumbs.add(me.meta.module, me.doctype)
 	})
 
+}
+
+_f.Frm.prototype.trigger_link_fields = function() {
+	// trigger link fields which have default values set
+	if (this.is_new() && this.doc.__run_link_triggers) {
+		$.each(this.fields_dict, function(fieldname, field) {
+			if (field.df.fieldtype=="Link" && this.doc[fieldname]) {
+				// triggers add fetch, sets value in model and runs triggers
+				field.set_value(this.doc[fieldname]);
+			}
+		});
+
+		delete this.doc.__run_link_triggers;
+	}
 }
 
 _f.Frm.prototype.runscript = function(scriptname, callingfield, onrefresh) {
@@ -550,7 +593,10 @@ _f.Frm.prototype.copy_doc = function(onload, from_amend) {
 	var newdoc = frappe.model.copy_doc(this.doc, from_amend);
 
 	newdoc.idx = null;
-	if(onload)onload(newdoc);
+	newdoc.__run_link_triggers = false;
+	if(onload) {
+		onload(newdoc);
+	}
 	loaddoc(newdoc.doctype, newdoc.name);
 }
 
@@ -592,6 +638,10 @@ _f.Frm.prototype._save = function(save_action, callback, btn, on_error) {
 
 	var after_save = function(r) {
 		if(!r.exc) {
+			if (["Save", "Update", "Amend"].indexOf(save_action)!==-1) {
+				frappe.utils.play_sound("click");
+			}
+
 			me.script_manager.trigger("after_save");
 			me.refresh();
 		} else {
@@ -648,6 +698,7 @@ _f.Frm.prototype.savesubmit = function(btn, callback, on_error) {
 
 			me.save('Submit', function(r) {
 				if(!r.exc) {
+					frappe.utils.play_sound("submit");
 					callback && callback();
 					me.script_manager.trigger("on_submit");
 				}
@@ -670,6 +721,7 @@ _f.Frm.prototype.savecancel = function(btn, callback, on_error) {
 
 			var after_cancel = function(r) {
 				if(!r.exc) {
+					frappe.utils.play_sound("cancel");
 					me.refresh();
 					callback && callback();
 					me.script_manager.trigger("after_cancel");
@@ -703,6 +755,7 @@ _f.Frm.prototype.amend_doc = function() {
 	      newdoc.amendment_date = dateutil.obj_to_str(new Date());
     }
     this.copy_doc(fn, 1);
+	frappe.utils.play_sound("click");
 }
 
 _f.Frm.prototype.disable_save = function() {
@@ -774,7 +827,7 @@ _f.Frm.prototype.set_footnote = function(txt) {
 
 
 _f.Frm.prototype.add_custom_button = function(label, fn, icon, toolbar_or_class) {
-	this.page.add_inner_button(label, fn);
+	return this.page.add_inner_button(label, fn);
 }
 
 _f.Frm.prototype.clear_custom_buttons = function() {
@@ -814,4 +867,8 @@ _f.Frm.prototype.validate_form_action = function(action) {
 
 _f.Frm.prototype.get_handlers = function(fieldname, doctype, docname) {
 	return this.script_manager.get_handlers(fieldname, doctype || this.doctype, docname || this.docname)
+}
+
+_f.Frm.prototype.has_perm = function(ptype) {
+	return frappe.perm.has_perm(this.doctype, 0, ptype, this.doc);
 }

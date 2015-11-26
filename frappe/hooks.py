@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 app_name = "frappe"
 app_title = "Frappe Framework"
 app_publisher = "Frappe Technologies Pvt. Ltd."
+app_short_description = "Full stack web framework with Python, Javascript, MariaDB, Redis, Node"
 app_description = """## Frappe Framework
 
 Frappe is a full stack web application framework written in Python,
@@ -26,9 +27,10 @@ to ERPNext.
 """
 
 app_icon = "octicon octicon-circuit-board"
-app_version = "5.3.1"
+app_version = "6.9.3"
 app_color = "orange"
-github_link = "https://github.com/frappe/frappe"
+source_link = "https://github.com/frappe/frappe"
+app_license = "MIT"
 
 app_email = "info@frappe.io"
 
@@ -147,11 +149,34 @@ scheduler_events = {
 		"frappe.desk.doctype.event.event.send_event_digest",
 		"frappe.sessions.clear_expired_sessions",
 		"frappe.email.doctype.email_alert.email_alert.trigger_daily_alerts",
+		"frappe.async.remove_old_task_logs",
+	],
+	"daily_long": [
+		"frappe.integrations.doctype.dropbox_backup.dropbox_backup.take_backups_daily"
+	],
+	"weekly_long": [
+		"frappe.integrations.doctype.dropbox_backup.dropbox_backup.take_backups_weekly"
 	]
+
 }
 
 default_background = "/assets/frappe/images/ui/into-the-dawn.jpg"
 
 get_translated_dict = {
 	("doctype", "System Settings"): "frappe.geo.country_info.get_translated_dict"
+}
+
+sounds = [
+	{"name": "email", "src": "/assets/frappe/sounds/email.mp3"},
+	{"name": "submit", "src": "/assets/frappe/sounds/submit.mp3"},
+	{"name": "cancel", "src": "/assets/frappe/sounds/cancel.mp3"},
+	{"name": "delete", "src": "/assets/frappe/sounds/delete.mp3"},
+	{"name": "click", "src": "/assets/frappe/sounds/click.mp3"},
+	{"name": "error", "src": "/assets/frappe/sounds/error.mp3"},
+	# {"name": "alert", "src": "/assets/frappe/sounds/alert.mp3"},
+	# {"name": "chime", "src": "/assets/frappe/sounds/chime.mp3"},
+]
+
+get_translated_dict = {
+	("page", "setup-wizard"): "frappe.geo.country_info.get_translated_dict",
 }

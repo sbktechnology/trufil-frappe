@@ -208,7 +208,7 @@ class Database:
 		if query and query.strip().lower() in ('commit', 'rollback'):
 			self.transaction_writes = 0
 
-		if query[:6].lower() in ['update', 'insert']:
+		if query[:6].lower() in ('update', 'insert', 'delete'):
 			self.transaction_writes += 1
 			if self.transaction_writes > 200000:
 				if self.auto_commit_on_many_writes:
@@ -344,7 +344,7 @@ class Database:
 					_rhs = " ({0})".format(", ".join(inner_list))
 					del values[key]
 
-			if _operator not in ["=", "!=", ">", ">=", "<", "<=", "like", "in", "not in"]:
+			if _operator not in ["=", "!=", ">", ">=", "<", "<=", "like", "in", "not in", "not like"]:
 				_operator = "="
 
 			if "[" in key:
@@ -505,11 +505,23 @@ class Database:
 	def get_list(self, *args, **kwargs):
 		return frappe.get_list(*args, **kwargs)
 
-	def get_single_value(self, doctype, fieldname):
-		"""Get property of Single DocType."""
+	def get_single_value(self, doctype, fieldname, cache=False):
+		"""Get property of Single DocType. Cache locally by default"""
+		value = self.value_cache.setdefault(doctype, {}).get(fieldname)
+		if value:
+			return value
+
 		val = self.sql("""select value from
 			tabSingles where doctype=%s and field=%s""", (doctype, fieldname))
-		return val[0][0] if val else None
+		val = val[0][0] if val else None
+
+		if val=="0" or val=="1":
+			# check type
+			val = int(val)
+
+		self.value_cache[doctype][fieldname] = val
+
+		return val
 
 	def get_singles_value(self, *args, **kwargs):
 		"""Alias for get_single_value"""
@@ -593,6 +605,10 @@ class Database:
 			if update_modified and (field not in ("modified", "modified_by")):
 				self.set_value(dt, dn, "modified", modified)
 				self.set_value(dt, dn, "modified_by", modified_by)
+
+
+		if dt in self.value_cache:
+			del self.value_cache[dt]
 
 	def set(self, doc, field, val):
 		"""Set value in document. **Avoid**"""
@@ -769,7 +785,7 @@ class Database:
 			self._conn = None
 
 	def escape(self, s):
-		"""Excape quotes in given string."""
+		"""Excape quotes and percent in given string."""
 		if isinstance(s, unicode):
 			s = (s or "").encode("utf-8")
-		return unicode(MySQLdb.escape_string(s), "utf-8")
+		return unicode(MySQLdb.escape_string(s), "utf-8").replace("%","%%").replace("`", "\\`")

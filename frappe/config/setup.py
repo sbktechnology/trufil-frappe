@@ -100,7 +100,7 @@ def get_data():
 				},
 				{
 					"type": "doctype",
-					"name": "File Data",
+					"name": "File",
 					"description": _("Manage uploaded files.")
 				}
 			]
@@ -170,6 +170,23 @@ def get_data():
 			]
 		},
 		{
+			"label": _("Integrations"),
+			"icon": "icon-star",
+			"items": [
+				{
+					"type": "doctype",
+					"name": "Social Login Keys",
+					"description": _("Enter keys to enable login via Facebook, Google, GitHub."),
+				},
+				{
+					"type": "doctype",
+					"name": "Dropbox Backup",
+					"description": _("Manage cloud backups on Dropbox"),
+					"hide_count": True
+				}
+			]
+		},
+		{
 			"label": _("Customize"),
 			"icon": "icon-glass",
 			"items": [
@@ -210,14 +227,15 @@ def get_data():
 				},
 				{
 					"type": "doctype",
-					"name": "Backup Manager",
-					"description": _("Manage cloud backups on Dropbox"),
-					"hide_count": True
-				},
-				{
-					"type": "doctype",
 					"name": "Scheduler Log",
 					"description": _("Log of error on automated events (scheduler).")
+				},
+				{
+					"type": "page",
+					"name": "backups",
+					"label": _("Download Backups"),
+					"description": _("List of backups available for download"),
+					"icon": "icon-download"
 				},
 			]
 		}
