@@ -543,6 +543,7 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 						doctype: me.doctype
 					},
 					callback: function() {
+						me.$page.find('.list-select-all').prop("checked", false);
 						frappe.utils.play_sound("delete");
 						me.set_working(false);
 						me.dirty = true;
