@@ -41,7 +41,7 @@ def pass_context(f):
 	return click.pass_context(_func)
 
 def get_single_site(context):
-	if not len(context.sites) == 1:
+	if not context.sites or not len(context.sites) == 1:
 		print 'please select a site'
 		sys.exit(1)
 	site = context.sites[0]
@@ -65,7 +65,7 @@ def new_site(site, mariadb_root_username=None, mariadb_root_password=None, admin
 	if not db_name:
 		db_name = hashlib.sha1(site).hexdigest()[:10]
 
-	frappe.init(site=site)
+	frappe.init(site=site, new_site=True)
 	_new_site(db_name, site, mariadb_root_username=mariadb_root_username, mariadb_root_password=mariadb_root_password, admin_password=admin_password, verbose=verbose, install_apps=install_app, source_sql=source_sql, force=force)
 	if len(frappe.utils.get_sites()) == 1:
 		use(site)
@@ -195,39 +195,16 @@ def add_system_manager(context, email, first_name, last_name):
 @pass_context
 def migrate(context, rebuild_website=False):
 	"Run patches, sync schema and rebuild files/translations"
-	import frappe.modules.patch_handler
-	import frappe.model.sync
-	from frappe.utils.fixtures import sync_fixtures
-	import frappe.translate
-	from frappe.desk.notifications import clear_notifications
+	from frappe.migrate import migrate
 
 	for site in context.sites:
 		print 'Migrating', site
 		frappe.init(site=site)
 		frappe.connect()
-
 		try:
-			prepare_for_update()
-
-			# run patches
-			frappe.modules.patch_handler.run_all()
-			# sync
-			frappe.model.sync.sync_all(verbose=context.verbose)
-			frappe.translate.clear_cache()
-			sync_fixtures()
-
-			clear_notifications()
+			migrate(context.verbose, rebuild_website=rebuild_website)
 		finally:
 			frappe.destroy()
-
-	if rebuild_website:
-		call_command(build_website, context)
-	else:
-		call_command(sync_www, context)
-
-def prepare_for_update():
-	from frappe.sessions import clear_global_cache
-	clear_global_cache()
 
 @click.command('run-patch')
 @click.argument('module')
@@ -344,7 +321,7 @@ def build_website(context):
 			frappe.init(site=site)
 			frappe.connect()
 			render.clear_cache()
-			statics.sync(verbose=context.verbose).start(True)
+			statics.sync(verbose=context.verbose).start(rebuild=True)
 			frappe.db.commit()
 		finally:
 			frappe.destroy()
@@ -401,22 +378,49 @@ def write_docs(context, app, target, local=False):
 @click.command('build-docs')
 @pass_context
 @click.argument('app')
-@click.argument('docs_version')
-@click.argument('target')
+@click.option('--docs-version', default='current')
+@click.option('--target', default=None)
 @click.option('--local', default=False, is_flag=True, help='Run app locally')
-def build_docs(context, app, docs_version, target, local=False):
+@click.option('--watch', default=False, is_flag=True, help='Watch for changes and rewrite')
+def build_docs(context, app, docs_version="current", target=None, local=False, watch=False):
 	"Setup docs in target folder of target app"
-	from frappe.utils.setup_docs import setup_docs
+	from frappe.utils import watch as start_watch
+	if not target:
+		target = os.path.abspath(os.path.join("..", "docs", app))
+
 	for site in context.sites:
-		try:
-			frappe.init(site=site)
-			frappe.connect()
-			make = setup_docs(app)
+		_build_docs_once(site, app, docs_version, target, local)
+
+		if watch:
+			def trigger_make(source_path, event_type):
+				if "/templates/autodoc/" in source_path:
+					_build_docs_once(site, app, docs_version, target, local)
+
+				elif ("/docs.css" in source_path
+					or "/docs/" in source_path
+					or "docs.py" in source_path):
+					_build_docs_once(site, app, docs_version, target, local, only_content_updated=True)
+
+			apps_path = frappe.get_app_path("frappe", "..", "..")
+			start_watch(apps_path, handler=trigger_make)
+
+def _build_docs_once(site, app, docs_version, target, local, only_content_updated=False):
+	from frappe.utils.setup_docs import setup_docs
+
+	try:
+
+		frappe.init(site=site)
+		frappe.connect()
+		make = setup_docs(app)
+
+		if not only_content_updated:
 			make.build(docs_version)
 			make.sync_docs()
-			make.make_docs(target, local)
-		finally:
-			frappe.destroy()
+
+		make.make_docs(target, local)
+
+	finally:
+		frappe.destroy()
 
 
 @click.command('reset-perms')
@@ -653,6 +657,24 @@ def build_message_files(context):
 		finally:
 			frappe.destroy()
 
+@click.command('new-language') #, help="Create lang-code.csv for given app")
+@pass_context
+@click.argument('lang_code') #, help="Language code eg. en")
+@click.argument('app') #, help="App name eg. frappe")
+def new_language(context, lang_code, app):
+	"""Create lang-code.csv for given app"""
+	import frappe.translate
+
+	if not context['sites']:
+		raise Exception('--site is required')
+
+	# init site
+	frappe.connect(site=context['sites'][0])
+	frappe.translate.write_translations_file(app, lang_code)
+
+	print "File created at ./apps/{app}/{app}/translations/{lang_code}.csv".format(app=app, lang_code=lang_code)
+	print "You will need to add the language in frappe/data/languages.txt, if you haven't done it already."
+
 @click.command('get-untranslated')
 @click.argument('lang')
 @click.argument('untranslated_file')
@@ -684,6 +706,22 @@ def update_translations(context, lang, untranslated_file, translated_file):
 		frappe.translate.update_translations(lang, untranslated_file, translated_file)
 	finally:
 		frappe.destroy()
+
+@click.command('import-translations')
+@click.argument('lang')
+@click.argument('path')
+@pass_context
+def import_translations(context, lang, path):
+	"Update translated strings"
+	import frappe.translate
+	site = get_single_site(context)
+	try:
+		frappe.init(site=site)
+		frappe.connect()
+		frappe.translate.import_translations(lang, path)
+	finally:
+		frappe.destroy()
+
 
 @click.command('set-admin-password')
 @click.argument('admin-password')
@@ -733,8 +771,9 @@ def console(context):
 @click.option('--test', multiple=True)
 @click.option('--driver')
 @click.option('--module')
+@click.option('--profile', is_flag=True, default=False)
 @pass_context
-def run_tests(context, app=None, module=None, doctype=None, test=(), driver=None):
+def run_tests(context, app=None, module=None, doctype=None, test=(), driver=None, profile=False):
 	"Run tests"
 	import frappe.test_runner
 	from frappe.utils import sel
@@ -747,7 +786,8 @@ def run_tests(context, app=None, module=None, doctype=None, test=(), driver=None
 		sel.start(context.verbose, driver)
 
 	try:
-		ret = frappe.test_runner.main(app, module, doctype, context.verbose, tests=tests, force=context.force)
+		ret = frappe.test_runner.main(app, module, doctype, context.verbose, tests=tests,
+			force=context.force, profile=profile)
 		if len(ret.failures) == 0 and len(ret.errors) == 0:
 			ret = 0
 	finally:
@@ -799,7 +839,6 @@ def request(context, args):
 def doctor():
 	"Get diagnostic info about background workers"
 	from frappe.utils.doctor import doctor as _doctor
-	frappe.init('')
 	return _doctor()
 
 @click.command('celery-doctor')
@@ -810,20 +849,23 @@ def celery_doctor(site=None):
 	frappe.init('')
 	return _celery_doctor(site=site)
 
-@click.command('purge-all-tasks')
-def purge_all_tasks():
-	"Purge any pending periodic tasks of 'all' event. Doesn't purge hourly, daily and weekly"
-	frappe.init('')
+@click.command('purge-pending-tasks')
+@click.option('--site', help='site name')
+@click.option('--event', default=None, help='one of "all", "weekly", "monthly", "hourly", "daily", "weekly_long", "daily_long"')
+def purge_all_tasks(site=None, event=None):
+	"Purge any pending periodic tasks, if event option is not given, it will purge everything for the site"
 	from frappe.utils.doctor import purge_pending_tasks
-	count = purge_pending_tasks()
+	frappe.init(site or '')
+	count = purge_pending_tasks(event=None, site=None)
 	print "Purged {} tasks".format(count)
 
 @click.command('dump-queue-status')
 def dump_queue_status():
 	"Dump detailed diagnostic infomation for task queues in JSON format"
 	frappe.init('')
-	from frappe.utils.doctor import dump_queue_status as _dump_queue_status
+	from frappe.utils.doctor import dump_queue_status as _dump_queue_status, inspect_queue
 	print json.dumps(_dump_queue_status(), indent=1)
+	inspect_queue()
 
 @click.command('make-app')
 @click.argument('destination')
@@ -844,21 +886,23 @@ def use(site, sites_path='.'):
 @click.command('backup')
 @click.option('--with-files', default=False, is_flag=True, help="Take backup with files")
 @pass_context
-def backup(context, with_files=False, backup_path_db=None, backup_path_files=None, quiet=False):
+def backup(context, with_files=False, backup_path_db=None, backup_path_files=None,
+	backup_path_private_files=None, quiet=False):
 	"Backup"
 	from frappe.utils.backups import scheduled_backup
 	verbose = context.verbose
 	for site in context.sites:
 		frappe.init(site=site)
 		frappe.connect()
-		odb = scheduled_backup(ignore_files=not with_files, backup_path_db=backup_path_db, backup_path_files=backup_path_files, force=True)
+		odb = scheduled_backup(ignore_files=not with_files, backup_path_db=backup_path_db, backup_path_files=backup_path_files, backup_path_private_files=backup_path_private_files, force=True)
 		if verbose:
 			from frappe.utils import now
 			print "database backup taken -", odb.backup_path_db, "- on", now()
 			if with_files:
 				print "files backup taken -", odb.backup_path_files, "- on", now()
-		frappe.destroy()
+				print "private files backup taken -", odb.backup_path_private_files, "- on", now()
 
+		frappe.destroy()
 
 @click.command('remove-from-installed-apps')
 @click.argument('app')
@@ -945,10 +989,9 @@ def drop_site(site, root_login='root', root_password=None):
 	move(archived_sites_dir, site)
 
 @click.command('version')
-@pass_context
-def get_version(context):
-	frappe.init(site=context.sites[0])
-	for m in sorted(frappe.local.app_modules.keys()):
+def get_version():
+	frappe.init('')
+	for m in sorted(frappe.get_all_apps()):
 		module = frappe.get_module(m)
 		if hasattr(module, "__version__"):
 			print "{0} {1}".format(m, module.__version__)
@@ -999,6 +1042,7 @@ commands = [
 	build_message_files,
 	get_untranslated,
 	update_translations,
+	import_translations,
 	set_admin_password,
 	mysql,
 	run_tests,
@@ -1017,4 +1061,5 @@ commands = [
 	drop_site,
 	set_config,
 	get_version,
+	new_language
 ]

@@ -6,7 +6,7 @@
 {% set controller = autodoc.get_controller(doctype) %}
 
 <div class="dev-header">
-{{ app.version or version(doctype) }}
+{{ version(doctype) }}
 {{ source_link(app, app.name + "/" + scrub(doc.module)
   + "/doctype/" + scrub(doctype), True) }}
 </div>
@@ -22,7 +22,7 @@
 
 <h3>Fields</h3>
 
-<table class="table table-bordered" style="table-layout: fixed;">
+<table class="table table-bordered">
     <thead>
         <tr>
             <th style="width: 5%">Sr</th>

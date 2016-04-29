@@ -97,7 +97,9 @@ def is_file_old(file_path):
 	return ((time.time() - os.stat(file_path).st_mtime) > TASK_LOG_MAX_AGE)
 
 
-def publish_realtime(event=None, message=None, room=None, user=None, doctype=None, docname=None, now=False):
+def publish_realtime(event=None, message=None, room=None,
+	user=None, doctype=None, docname=None, task_id=None,
+	after_commit=False):
 	"""Publish real-time updates
 
 	:param event: Event name, like `task_progress` etc. that will be handled by the client (default is `task_progress` if within task or `global`)
@@ -105,23 +107,27 @@ def publish_realtime(event=None, message=None, room=None, user=None, doctype=Non
 	:param room: Room in which to publish update (default entire site)
 	:param user: Transmit to user
 	:param doctype: Transmit to doctype, docname
-	:param docname: Transmit to doctype, docname"""
+	:param docname: Transmit to doctype, docname
+	:param after_commit: (default False) will emit after current transaction is committed"""
 	if message is None:
 		message = {}
 
 	if event is None:
-		if frappe.local.task_id:
+		if getattr(frappe.local, "task_id", None):
 			event = "task_progress"
 		else:
 			event = "global"
 
 	if not room:
-		if frappe.local.task_id:
-			room = get_task_progress_room()
-			if not "task_id" in message:
-				message["task_id"] = frappe.local.task_id
+		if not task_id and hasattr(frappe.local, "task_id"):
+			task_id = frappe.local.task_id
 
-			now = True
+		if task_id:
+			room = get_task_progress_room(task_id)
+			if not "task_id" in message:
+				message["task_id"] = task_id
+
+			after_commit = False
 		elif user:
 			room = get_user_room(user)
 		elif doctype and docname:
@@ -129,10 +135,10 @@ def publish_realtime(event=None, message=None, room=None, user=None, doctype=Non
 		else:
 			room = get_site_room()
 
-	if now:
-		emit_via_redis(event, message, room)
-	else:
+	if after_commit:
 		frappe.local.realtime_log.append([event, message, room])
+	else:
+		emit_via_redis(event, message, room)
 
 def emit_via_redis(event, message, room):
 	"""Publish real-time updates via redis
@@ -152,24 +158,26 @@ def put_log(line_no, line, task_id=None):
 	r = get_redis_server()
 	if not task_id:
 		task_id = frappe.local.task_id
-	task_progress_room = get_task_progress_room()
+	task_progress_room = get_task_progress_room(task_id)
 	task_log_key = "task_log:" + task_id
 	publish_realtime('task_progress', {
 		"message": {
 			"lines": {line_no: line}
 		},
 		"task_id": task_id
-	}, room=task_progress_room, now=True)
+	}, room=task_progress_room)
 	r.hset(task_log_key, line_no, line)
 	r.expire(task_log_key, 3600)
 
 
 def get_redis_server():
-	"""Returns memcache connection."""
+	"""returns redis_socketio connection."""
 	global redis_server
 	if not redis_server:
 		from redis import Redis
-		redis_server = Redis.from_url(conf.get("async_redis_server") or "redis://localhost:12311")
+		redis_server = Redis.from_url(conf.get("redis_socketio")
+			or conf.get("async_redis_server")
+			or "redis://localhost:12311")
 	return redis_server
 
 
@@ -224,5 +232,5 @@ def get_user_room(user):
 def get_site_room():
 	return ''.join([frappe.local.site, ':all'])
 
-def get_task_progress_room():
-	return "task_progress:" + frappe.local.task_id
+def get_task_progress_room(task_id):
+	return "".join([frappe.local.site, ":task_progress:", task_id])

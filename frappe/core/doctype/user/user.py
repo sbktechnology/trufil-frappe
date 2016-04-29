@@ -3,13 +3,14 @@
 
 from __future__ import unicode_literals
 import frappe
-from frappe.utils import cint, get_gravatar, format_datetime, now_datetime
+from frappe.utils import cint, get_gravatar, format_datetime, now_datetime, get_formatted_email
 from frappe import throw, msgprint, _
 from frappe.auth import _update_password
 from frappe.desk.notifications import clear_notifications
 from frappe.utils.user import get_system_managers
 import frappe.permissions
 import frappe.share
+import re
 
 STANDARD_USERS = ("Guest", "Administrator")
 
@@ -22,6 +23,11 @@ class User(Document):
 		if self.name not in STANDARD_USERS:
 			self.email = self.email.strip()
 			self.name = self.email
+
+	def onload(self):
+		self.set_onload('all_modules',
+			[m.module_name for m in frappe.db.get_all('Desktop Icon',
+				fields=['module_name'], filters={'standard': 1})])
 
 	def validate(self):
 		self.in_insert = self.get("__islocal")
@@ -38,6 +44,9 @@ class User(Document):
 		self.update_gravatar()
 		self.ensure_unique_roles()
 		self.remove_all_roles_for_guest()
+		self.validate_username()
+		self.remove_disabled_roles()
+
 		if self.language == "Loading...":
 			self.language = None
 
@@ -85,7 +94,7 @@ class User(Document):
 		self.share_with_self()
 		clear_notifications(user=self.name)
 		frappe.clear_cache(user=self.name)
-		self.send_password_notifcation(self.__new_password)
+		self.send_password_notification(self.__new_password)
 
 	def share_with_self(self):
 		if self.user_type=="System User":
@@ -93,7 +102,7 @@ class User(Document):
 				flags={"ignore_share_permission": True})
 		else:
 			frappe.share.remove(self.doctype, self.name, self.name,
-				flags={"ignore_share_permission": True})
+				flags={"ignore_share_permission": True, "ignore_permissions": True})
 
 	def validate_share(self, docshare):
 		if docshare.user == self.name:
@@ -103,7 +112,7 @@ class User(Document):
 			else:
 				frappe.throw(_("Sorry! Sharing with Website User is prohibited."))
 
-	def send_password_notifcation(self, new_password):
+	def send_password_notification(self, new_password):
 		try:
 			if self.in_insert:
 				if self.name not in STANDARD_USERS:
@@ -188,7 +197,7 @@ class User(Document):
 
 		args.update(add_args)
 
-		sender = frappe.session.user not in STANDARD_USERS and frappe.session.user or None
+		sender = frappe.session.user not in STANDARD_USERS and get_formatted_email(frappe.session.user) or None
 
 		frappe.sendmail(recipients=self.email, sender=sender, subject=subject,
 			message=frappe.get_template(template).render(args), as_bulk=self.flags.delay_emails)
@@ -222,8 +231,10 @@ class User(Document):
 			and event_type='Private'""", (self.name,))
 
 		# delete messages
-		frappe.db.sql("""delete from `tabComment` where comment_doctype='Message'
-			and (comment_docname=%s or owner=%s)""", (self.name, self.name))
+		frappe.db.sql("""delete from `tabCommunication`
+			where communication_type in ('Chat', 'Notification')
+			and reference_doctype='User'
+			and (reference_name=%s or owner=%s)""", (self.name, self.name))
 
 	def before_rename(self, olddn, newdn, merge=False):
 		frappe.clear_cache(user=olddn)
@@ -287,7 +298,13 @@ class User(Document):
 	def remove_all_roles_for_guest(self):
 		if self.name == "Guest":
 			self.set("user_roles", list(set(d for d in self.get("user_roles") if d.role == "Guest")))
-
+			
+	def remove_disabled_roles(self):
+		disabled_roles = [d.name for d in frappe.get_all("Role", filters={"disabled":1})]
+		for role in list(self.get('user_roles')):
+			if role.role in disabled_roles:
+				self.get('user_roles').remove(role)
+		
 	def ensure_unique_roles(self):
 		exists = []
 		for i, d in enumerate(self.get("user_roles")):
@@ -296,14 +313,56 @@ class User(Document):
 			else:
 				exists.append(d.role)
 
+	def validate_username(self):
+		if not self.username and self.is_new() and self.first_name:
+			self.username = frappe.scrub(self.first_name)
+
+		if not self.username:
+			return
+
+		# strip space and @
+		self.username = self.username.strip(" @")
+
+		if self.username_exists():
+			frappe.msgprint(_("Username {0} already exists").format(self.username))
+			self.suggest_username()
+			self.username = ""
+
+		# should be made up of characters, numbers and underscore only
+		if self.username and not re.match(r"^[\w]+$", self.username):
+			frappe.msgprint(_("Username should not contain any special characters other than letters, numbers and underscore"))
+			self.username = ""
+
+	def suggest_username(self):
+		def _check_suggestion(suggestion):
+			if self.username != suggestion and not self.username_exists(suggestion):
+				return suggestion
+
+			return None
+
+		# @firstname
+		username = _check_suggestion(frappe.scrub(self.first_name))
+
+		if not username:
+			# @firstname_last_name
+			username = _check_suggestion(frappe.scrub("{0} {1}".format(self.first_name, self.last_name or "")))
+
+		if username:
+			frappe.msgprint(_("Suggested Username: {0}").format(username))
+
+		return username
+
+	def username_exists(self, username=None):
+		return frappe.db.get_value("User", {"username": username or self.username, "name": ("!=", self.name)})
+
+	def get_blocked_modules(self):
+		"""Returns list of modules blocked for that user"""
+		return [d.module for d in self.block_modules] if self.block_modules else []
+
 @frappe.whitelist()
-def get_languages():
-	from frappe.translate import get_lang_dict
+def get_timezones():
 	import pytz
-	languages = get_lang_dict().keys()
-	languages.sort()
 	return {
-		"languages": [""] + languages,
 		"timezones": pytz.all_timezones
 	}
 
@@ -311,7 +370,7 @@ def get_languages():
 def get_all_roles(arg=None):
 	"""return all roles"""
 	return [r[0] for r in frappe.db.sql("""select name from tabRole
-		where name not in ('Administrator', 'Guest', 'All') order by name""")]
+		where name not in ('Administrator', 'Guest', 'All') and not disabled order by name""")]
 
 @frappe.whitelist()
 def get_user_roles(arg=None):
@@ -463,9 +522,6 @@ def has_permission(doc, user):
 		# dont allow non Administrator user to view / edit Administrator user
 		return False
 
-	else:
-		return True
-
 def notifify_admin_access_to_system_manager(login_manager=None):
 	if (login_manager
 		and login_manager.user == "Administrator"
@@ -490,3 +546,7 @@ def notifify_admin_access_to_system_manager(login_manager=None):
 		frappe.sendmail(recipients=get_system_managers(), subject=_("Administrator Logged In"),
 			message=message, bulk=True)
 
+def extract_mentions(txt):
+	"""Find all instances of @username in the string.
+	The mentions will be separated by non-word characters or may appear at the start of the string"""
+	return re.findall(r'(?:[^\w]|^)@([\w]*)', txt)

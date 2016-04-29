@@ -25,7 +25,6 @@ import mimetypes, imghdr
 from frappe.utils import get_files_path
 
 class FolderNotEmpty(frappe.ValidationError): pass
-class ThumbnailError(frappe.ValidationError): pass
 
 exclude_from_linked_with = True
 
@@ -109,6 +108,9 @@ class File(NestedSet):
 			frappe.throw(_("Folder is mandatory"))
 
 	def validate_file(self):
+		"""Validates existence of public file
+		TODO: validate for private file
+		"""
 		if (self.file_url or "").startswith("/files/"):
 			if not self.file_name:
 				self.file_name = self.file_url.split("/files/")[-1]
@@ -154,13 +156,16 @@ class File(NestedSet):
 	def make_thumbnail(self):
 		if self.file_url:
 			if self.file_url.startswith("/files"):
-				image, filename, extn = get_local_image(self.file_url)
+				try:
+					image, filename, extn = get_local_image(self.file_url)
+				except IOError:
+					return
 
 			else:
 				try:
 					image, filename, extn = get_web_image(self.file_url)
-				except ThumbnailError:
-					frappe.msgprint("Unable to write file format for {0}".format(self.file_url))
+				except (requests.exceptions.HTTPError, requests.exceptions.SSLError, IOError):
+					return
 
 			thumbnail = ImageOps.fit(
 				image,
@@ -177,6 +182,7 @@ class File(NestedSet):
 				self.db_set("thumbnail_url", thumbnail_url)
 			except IOError:
 				frappe.msgprint("Unable to write file format for {0}".format(path))
+				return
 
 			return thumbnail_url
 
@@ -238,9 +244,12 @@ def make_home_folder():
 @frappe.whitelist()
 def get_breadcrumbs(folder):
 	"""returns name, file_name of parent folder"""
-	lft, rgt = frappe.db.get_value("File", folder, ["lft", "rgt"])
+	values = frappe.db.get_value("File", folder, ["lft", "rgt"], as_dict=True)
+	if not values:
+		frappe.throw(_("Folder {0} does not exist").format(folder))
+
 	return frappe.db.sql("""select name, file_name from tabFile
-		where lft < %s and rgt > %s order by lft asc""", (lft, rgt), as_dict=1)
+		where lft < %s and rgt > %s order by lft asc""", (values.lft, values.rgt), as_dict=1)
 
 @frappe.whitelist()
 def create_new_folder(file_name, folder):
@@ -289,7 +298,7 @@ def get_local_image(file_url):
 		image = Image.open(file_path)
 	except IOError:
 		frappe.msgprint("Unable to read file format for {0}".format(file_url))
-		return
+		raise
 
 	content = None
 
@@ -315,9 +324,10 @@ def get_web_image(file_url):
 		r.raise_for_status()
 	except requests.exceptions.HTTPError, e:
 		if "404" in e.args[0]:
-			frappe.throw(_("File '{0}' not found").format(file_url))
+			frappe.msgprint(_("File '{0}' not found").format(file_url))
 		else:
-			raise ThumbnailError
+			frappe.msgprint("Unable to read file format for {0}".format(file_url))
+		raise
 
 	image = Image.open(StringIO.StringIO(r.content))
 
@@ -333,3 +343,12 @@ def get_web_image(file_url):
 	filename = "/files/" + strip(urllib.unquote(filename))
 
 	return image, filename, extn
+
+def check_file_permission(file_url):
+	for file in frappe.get_all("File", filters={"file_url": file_url, "is_private": 1}, fields=["name", "attached_to_doctype", "attached_to_name"]):
+
+		if (frappe.has_permission("File", ptype="read", doc=file.name)
+			or frappe.has_permission(file.attached_to_doctype, ptype="read", doc=file.attached_to_name)):
+			return True
+
+	raise frappe.PermissionError

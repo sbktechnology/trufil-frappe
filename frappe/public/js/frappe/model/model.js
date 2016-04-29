@@ -10,7 +10,7 @@ $.extend(frappe.model, {
 	layout_fields: ['Section Break', 'Column Break', 'Fold'],
 
 	std_fields_list: ['name', 'owner', 'creation', 'modified', 'modified_by',
-		'_user_tags', '_comments', '_assign', '_starred_by', 'docstatus',
+		'_user_tags', '_comments', '_assign', '_liked_by', 'docstatus',
 		'parent', 'parenttype', 'parentfield', 'idx'],
 
 	std_fields: [
@@ -21,7 +21,7 @@ $.extend(frappe.model, {
 		{fieldname:'modified', fieldtype:'Date', label:__('Last Updated On')},
 		{fieldname:'modified_by', fieldtype:'Data', label:__('Last Updated By')},
 		{fieldname:'_user_tags', fieldtype:'Data', label:__('Tags')},
-		{fieldname:'_starred_by', fieldtype:'Data', label:__('Starred By')},
+		{fieldname:'_liked_by', fieldtype:'Data', label:__('Liked By')},
 		{fieldname:'_comments', fieldtype:'Text', label:__('Comments')},
 		{fieldname:'_assign', fieldtype:'Text', label:__('Assigned To')},
 		{fieldname:'docstatus', fieldtype:'Int', label:__('Document Status')},
@@ -81,7 +81,7 @@ $.extend(frappe.model, {
 		return docfield[0];
 	},
 
-	with_doctype: function(doctype, callback) {
+	with_doctype: function(doctype, callback, async) {
 		if(locals.DocType[doctype]) {
 			callback && callback();
 		} else {
@@ -98,6 +98,7 @@ $.extend(frappe.model, {
 					with_parent: 1,
 					cached_timestamp: cached_timestamp
 				},
+				async: async,
 				freeze: true,
 				callback: function(r) {
 					if(r.exc) {
@@ -159,29 +160,6 @@ $.extend(frappe.model, {
 		}
 	},
 
-	new_comment: function(comment) {
-		var reference_doctype = comment.comment_doctype || comment.reference_doctype;
-		var reference_name = comment.comment_docname || comment.reference_name;
-
-		if (frappe.model.docinfo[reference_doctype] && frappe.model.docinfo[reference_doctype][reference_name]) {
-			var comments = frappe.model.docinfo[reference_doctype][reference_name].comments;
-			var comment_exists = false;
-			for (var i=0, l=comments.length; i<l; i++) {
-				if (comments[i].name==comment.name) {
-					comment_exists = true;
-					break;
-				}
-			}
-
-			if (!comment_exists) {
-				 frappe.model.docinfo[reference_doctype][reference_name].comments = comments.concat([comment]);
-			}
-		}
-		if (cur_frm.doctype === reference_doctype && cur_frm.docname === reference_name) {
-			cur_frm.comments && cur_frm.comments.refresh();
-		}
-	},
-
 	get_shared: function(doctype, name) {
 		return frappe.model.get_docinfo(doctype, name).shared;
 	},
@@ -235,7 +213,7 @@ $.extend(frappe.model, {
 
 	is_single: function(doctype) {
 		if(!doctype) return false;
-		return locals.DocType[doctype] && locals.DocType[doctype].issingle;
+		return frappe.boot.single_types.indexOf(doctype) != -1;
 	},
 
 	can_import: function(doctype, frm) {
@@ -340,7 +318,7 @@ $.extend(frappe.model, {
 			return true;
 		} else {
 			// execute link triggers (want to reselect to execute triggers)
-			if(fieldtype=="Link") {
+			if(fieldtype=="Link" && doc) {
 				frappe.model.trigger(fieldname, value, doc);
 			}
 		}

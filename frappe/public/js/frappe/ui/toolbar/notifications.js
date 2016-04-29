@@ -4,6 +4,7 @@ frappe.ui.notifications.update_notifications = function() {
 	frappe.ui.notifications.total = 0;
 	var doctypes = keys(frappe.boot.notification_info.open_count_doctype).sort();
 	var modules = keys(frappe.boot.notification_info.open_count_module).sort();
+	var other = keys(frappe.boot.notification_info.open_count_other).sort();
 
 	// clear toolbar / sidebar notifications
 	frappe.ui.notifications.navbar_notification = $("#navbar-notification").empty();
@@ -14,6 +15,12 @@ frappe.ui.notifications.update_notifications = function() {
 	frappe.ui.notifications.add_notification("ToDo");
 	frappe.ui.notifications.add_notification("Event");
 
+	// add other
+	$.each(other, function(i, name) {
+		frappe.ui.notifications.add_notification(name, frappe.boot.notification_info.open_count_other);
+	});
+
+
 	// add a divider
 	if(frappe.ui.notifications.total) {
 		var divider = '<li class="divider"></li>';
@@ -23,8 +30,9 @@ frappe.ui.notifications.update_notifications = function() {
 
 	// add to toolbar and sidebar
 	$.each(doctypes, function(i, doctype) {
-		if(!in_list(["ToDo", "Comment", "Event"]))
-		frappe.ui.notifications.add_notification(doctype);
+		if(!in_list(["ToDo", "Comment", "Event"], doctype)) {
+			frappe.ui.notifications.add_notification(doctype);
+		}
 	});
 
 	// set click events
@@ -33,6 +41,8 @@ frappe.ui.notifications.update_notifications = function() {
 		var config = frappe.ui.notifications.config[doctype] || {};
 		if (config.route) {
 			frappe.set_route(config.route);
+		} else if (config.click) {
+			config.click();
 		} else {
 			frappe.views.show_open_count_list(this);
 		}
@@ -40,13 +50,17 @@ frappe.ui.notifications.update_notifications = function() {
 
 	// switch colour on the navbar
 	$(".navbar-new-comments")
-		.html(frappe.ui.notifications.total)
+		.html(frappe.ui.notifications.total > 99 ? '99+' : frappe.ui.notifications.total)
 		.toggleClass("navbar-new-comments-true", frappe.ui.notifications.total ? true : false);
 
 }
 
-frappe.ui.notifications.add_notification = function(doctype) {
-	var count = frappe.boot.notification_info.open_count_doctype[doctype];
+frappe.ui.notifications.add_notification = function(doctype, notifications_map) {
+	if(!notifications_map) {
+		notifications_map = frappe.boot.notification_info.open_count_doctype;
+	}
+
+	var count = notifications_map[doctype];
 	if(count) {
 		var config = frappe.ui.notifications.config[doctype] || {};
 		var label = config.label || doctype;
@@ -55,8 +69,7 @@ frappe.ui.notifications.add_notification = function(doctype) {
 				%(count)s</span> \
 			%(label)s </a></li>', {
 				label: __(label),
-				icon: frappe.boot.doctype_icons[doctype],
-				count: count,
+				count: count > 99 ? '99+' : count,
 				data_doctype: doctype
 			});
 
@@ -70,8 +83,22 @@ frappe.ui.notifications.add_notification = function(doctype) {
 // default notification config
 frappe.ui.notifications.config = {
 	"ToDo": { label: __("To Do") },
-	"Comment": { label: __("Messages"), route: "messages"},
-	"Event": { label: __("Calendar"), route: "Calendar/Event" }
+	"Messages": { label: __("Messages"), route: "messages"},
+	"Event": { label: __("Calendar"), route: "Calendar/Event" },
+	"Likes": {
+		label: __("Likes"),
+		click: function() {
+			frappe.route_options = {
+				show_likes: true
+			};
+
+			if (frappe.get_route()[0]=="activity") {
+				frappe.pages['activity'].page.list.refresh();
+			} else {
+				frappe.set_route("activity");
+			}
+		}
+	},
 };
 
 frappe.views.show_open_count_list = function(element) {

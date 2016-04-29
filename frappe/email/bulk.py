@@ -10,14 +10,14 @@ from frappe.email.smtp import SMTPServer, get_outgoing_email_account
 from frappe.email.email_body import get_email, get_formatted_html
 from frappe.utils.verified_command import get_signed_params, verify_request
 from html2text import html2text
-from frappe.utils import get_url, nowdate, encode, now_datetime, add_days, split_emails
+from frappe.utils import get_url, nowdate, encode, now_datetime, add_days, split_emails, cstr
 
 class BulkLimitCrossedError(frappe.ValidationError): pass
 
 def send(recipients=None, sender=None, subject=None, message=None, reference_doctype=None,
 		reference_name=None, unsubscribe_method=None, unsubscribe_params=None, unsubscribe_message=None,
-		attachments=None, reply_to=None, cc=(), show_as_cc=(), message_id=None, send_after=None,
-		expose_recipients=False, bulk_priority=1):
+		attachments=None, reply_to=None, cc=(), show_as_cc=(), message_id=None, in_reply_to=None, send_after=None,
+		expose_recipients=False, bulk_priority=1, communication=None):
 	"""Add email to sending queue (Bulk Email)
 
 	:param recipients: List of recipients.
@@ -32,7 +32,9 @@ def send(recipients=None, sender=None, subject=None, message=None, reference_doc
 	:param attachments: Attachments to be sent.
 	:param reply_to: Reply to be captured here (default inbox)
 	:param message_id: Used for threading. If a reply is received to this email, Message-Id is sent back as In-Reply-To in received email.
+	:param in_reply_to: Used to send the Message-Id of a received email back as In-Reply-To.
 	:param send_after: Send this email after the given datetime. If value is in integer, then `send_after` will be the automatically set to no of days from current date.
+	:param communication: Communication link to be set in Bulk Email record
 	"""
 	if not unsubscribe_method:
 		unsubscribe_method = "/api/method/frappe.email.bulk.unsubscribe"
@@ -46,13 +48,13 @@ def send(recipients=None, sender=None, subject=None, message=None, reference_doc
 	if isinstance(send_after, int):
 		send_after = add_days(nowdate(), send_after)
 
+	email_account = get_outgoing_email_account(True, append_to=reference_doctype)
 	if not sender or sender == "Administrator":
-		email_account = get_outgoing_email_account()
 		sender = email_account.default_sender
 
 	check_bulk_limit(recipients)
 
-	formatted = get_formatted_html(subject, message)
+	formatted = get_formatted_html(subject, message, email_account=email_account)
 
 	try:
 		text_content = html2text(formatted)
@@ -100,25 +102,31 @@ def send(recipients=None, sender=None, subject=None, message=None, reference_doc
 
 		# add to queue
 		add(email, sender, subject, email_content, email_text_context, reference_doctype,
-			reference_name, attachments, reply_to, cc, message_id, send_after, bulk_priority)
+			reference_name, attachments, reply_to, cc, message_id, in_reply_to, send_after, bulk_priority,
+			email_account=email_account, communication=communication)
 
 def add(email, sender, subject, formatted, text_content=None,
 	reference_doctype=None, reference_name=None, attachments=None, reply_to=None,
-	cc=(), message_id=None, send_after=None, bulk_priority=1):
+	cc=(), message_id=None, in_reply_to=None, send_after=None, bulk_priority=1,
+	email_account=None, communication=None):
 	"""add to bulk mail queue"""
+
 	e = frappe.new_doc('Bulk Email')
-	e.sender = sender
 	e.recipient = email
 	e.priority = bulk_priority
 
 	try:
-		mail = get_email(email, sender=e.sender, formatted=formatted, subject=subject,
-			text_content=text_content, attachments=attachments, reply_to=reply_to, cc=cc)
+		mail = get_email(email, sender=sender, formatted=formatted, subject=subject,
+			text_content=text_content, attachments=attachments, reply_to=reply_to, cc=cc, email_account=email_account)
 
 		if message_id:
 			mail.set_message_id(message_id)
 
-		e.message = mail.as_string()
+		if in_reply_to:
+			mail.set_in_reply_to(in_reply_to)
+
+		e.message = cstr(mail.as_string())
+		e.sender = mail.sender
 
 	except frappe.InvalidEmailAddressError:
 		# bad email id - don't add to queue
@@ -126,12 +134,13 @@ def add(email, sender, subject, formatted, text_content=None,
 
 	e.reference_doctype = reference_doctype
 	e.reference_name = reference_name
+	e.communication = communication
 	e.send_after = send_after
 	e.insert(ignore_permissions=True)
 
 def check_bulk_limit(recipients):
 	# get count of mails sent this month
-	this_month = frappe.db.sql("""select count(*) from `tabBulk Email` where
+	this_month = frappe.db.sql("""select count(name) from `tabBulk Email` where
 		status='Sent' and MONTH(creation)=MONTH(CURDATE())""")[0][0]
 
 	# if using settings from site_config.json, check bulk limit
@@ -244,7 +253,7 @@ def flush(from_test=False):
 		from_test = True
 
 	frappe.db.sql("""update `tabBulk Email` set status='Expired'
-		where datediff(curdate(), creation) > 3""", auto_commit=auto_commit)
+		where datediff(curdate(), creation) > 3 and status='Not Sent'""", auto_commit=auto_commit)
 
 	for i in xrange(500):
 		email = frappe.db.sql("""select * from `tabBulk Email` where
@@ -257,6 +266,10 @@ def flush(from_test=False):
 
 		frappe.db.sql("""update `tabBulk Email` set status='Sending' where name=%s""",
 			(email["name"],), auto_commit=auto_commit)
+
+		if email.communication:
+			frappe.get_doc('Communication', email.communication).set_delivery_status(commit=auto_commit)
+
 		try:
 			if not from_test:
 				smtpserver.setup_email_account(email.reference_doctype)
@@ -264,6 +277,9 @@ def flush(from_test=False):
 
 			frappe.db.sql("""update `tabBulk Email` set status='Sent' where name=%s""",
 				(email["name"],), auto_commit=auto_commit)
+
+			if email.communication:
+				frappe.get_doc('Communication', email.communication).set_delivery_status(commit=auto_commit)
 
 		except (smtplib.SMTPServerDisconnected,
 				smtplib.SMTPConnectError,
@@ -274,6 +290,9 @@ def flush(from_test=False):
 			frappe.db.sql("""update `tabBulk Email` set status='Not Sent' where name=%s""",
 				(email["name"],), auto_commit=auto_commit)
 
+			if email.communication:
+				frappe.get_doc('Communication', email.communication).set_delivery_status(commit=auto_commit)
+
 			# no need to attempt further
 			return
 
@@ -281,8 +300,12 @@ def flush(from_test=False):
 			frappe.db.sql("""update `tabBulk Email` set status='Error', error=%s
 				where name=%s""", (unicode(e), email["name"]), auto_commit=auto_commit)
 
-		finally:
-			frappe.db.commit()
+			if email.communication:
+				frappe.get_doc('Communication', email.communication).set_delivery_status(commit=auto_commit)
+
+		# NOTE: removing commit here because we pass auto_commit
+		# finally:
+		# 	frappe.db.commit()
 
 def clear_outbox():
 	"""Remove mails older than 31 days in Outbox. Called daily via scheduler."""

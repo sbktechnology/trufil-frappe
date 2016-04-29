@@ -28,7 +28,11 @@ def validate_link():
 		frappe.response['message'] = 'Ok'
 		return
 
-	if frappe.db.sql("select name from `tab%s` where name=%s" % (frappe.db.escape(options), '%s'), (value,)):
+	valid_value = frappe.db.sql("select name from `tab%s` where name=%s" % (frappe.db.escape(options),
+		'%s'), (value,))
+
+	if valid_value:
+		valid_value = valid_value[0][0]
 
 		# get fetch values
 		if fetch:
@@ -39,6 +43,7 @@ def validate_link():
 				for c in frappe.db.sql("select %s from `tab%s` where name=%s" \
 					% (fetch, frappe.db.escape(options), '%s'), (value,))[0]]
 
+		frappe.response['valid_value'] = valid_value
 		frappe.response['message'] = 'Ok'
 
 @frappe.whitelist()
@@ -46,10 +51,10 @@ def add_comment(doc):
 	"""allow any logged user to post a comment"""
 	doc = frappe.get_doc(json.loads(doc))
 
-	if doc.doctype != "Comment":
+	if not (doc.doctype=="Communication" and doc.communication_type=='Comment'):
 		frappe.throw(_("This method can only be used to create a Comment"), frappe.PermissionError)
 
-	doc.insert(ignore_permissions = True)
+	doc.insert(ignore_permissions=True)
 
 	return doc.as_dict()
 

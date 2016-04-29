@@ -5,6 +5,7 @@ from __future__ import unicode_literals
 import frappe
 from frappe import _
 from frappe.utils import now_datetime, cint
+import re
 
 def set_new_name(doc):
 	"""Sets the `name`` property for the document based on various rules.
@@ -61,9 +62,9 @@ def set_name_by_naming_series(doc):
 	if not doc.naming_series:
 		frappe.throw(frappe._("Naming Series mandatory"))
 
-	doc.name = make_autoname(doc.naming_series+'.#####')
+	doc.name = make_autoname(doc.naming_series+'.#####', '', doc)
 
-def make_autoname(key, doctype=''):
+def make_autoname(key='', doctype='', doc=''):
 	"""
    Creates an autoname from the given key:
 
@@ -95,22 +96,26 @@ def make_autoname(key, doctype=''):
 	today = now_datetime()
 
 	for e in l:
-		en = ''
+		part = ''
 		if e.startswith('#'):
 			if not series_set:
 				digits = len(e)
-				en = getseries(n, digits, doctype)
+				part = getseries(n, digits, doctype)
 				series_set = True
 		elif e=='YY':
-			en = today.strftime('%y')
+			part = today.strftime('%y')
 		elif e=='MM':
-			en = today.strftime('%m')
+			part = today.strftime('%m')
 		elif e=='DD':
-			en = today.strftime("%d")
+			part = today.strftime("%d")
 		elif e=='YYYY':
-			en = today.strftime('%Y')
-		else: en = e
-		n+=en
+			part = today.strftime('%Y')
+		elif doc and doc.get(e):
+			part = doc.get(e)
+		else: part = e
+
+		if isinstance(part, basestring):
+			n+=part
 	return n
 
 def getseries(key, digits, doctype=''):
@@ -161,6 +166,11 @@ def validate_name(doctype, name, case=None, merge=False):
 	if not frappe.get_meta(doctype).get("issingle") and (doctype == name) and (name!="DocType"):
 		frappe.throw(_("Name of {0} cannot be {1}").format(doctype, name), frappe.NameError)
 
+	special_characters = "<>"
+	if re.findall("[{0}]+".format(special_characters), name):
+		message = ", ".join("'{0}'".format(c) for c in special_characters)
+		frappe.throw(_("Name cannot contain special characters like {0}").format(special_characters), frappe.NameError)
+
 	return name
 
 def _set_amended_name(doc):
@@ -176,7 +186,7 @@ def _set_amended_name(doc):
 def append_number_if_name_exists(doc):
 	if frappe.db.exists(doc.doctype, doc.name):
 		last = frappe.db.sql("""select name from `tab{}`
-			where name regexp '{}-[[:digit:]]+'
+			where name regexp '^{}-[[:digit:]]+'
 			order by length(name) desc, name desc limit 1""".format(doc.doctype, doc.name))
 
 		if last:

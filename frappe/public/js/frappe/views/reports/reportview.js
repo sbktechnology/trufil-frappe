@@ -109,6 +109,11 @@ frappe.views.ReportView = frappe.ui.Listing.extend({
 		this.make_save();
 		this.make_user_permissions();
 		this.set_tag_and_status_filter();
+
+		// add to desktop
+		this.page.add_menu_item(__("Add to Desktop"), function() {
+			frappe.add_to_desktop(__('{0} Report', [me.doctype]), me.doctype);
+		}, true);
 	},
 
 	make_new_and_refresh: function() {
@@ -120,6 +125,7 @@ frappe.views.ReportView = frappe.ui.Listing.extend({
 		this.page.add_menu_item(__("New {0}", [this.doctype]), function() {
 			me.make_new_doc(me.doctype);
 		}, true);
+
 	},
 
 	set_init_columns: function() {
@@ -247,10 +253,18 @@ frappe.views.ReportView = frappe.ui.Listing.extend({
 						"_user_tags": "Tag",
 						"_comments": "Comment",
 						"_assign": "Assign",
-						"_starred_by": "StarredBy",
+						"_liked_by": "LikedBy",
 					}[docfield.fieldname] || docfield.fieldtype;
 
 					if(docfield.fieldtype==="Link" && docfield.fieldname!=="name") {
+
+						// make a copy of docfield for reportview
+						// as it needs to add a link_onclick property
+						if(!columnDef.report_docfield) {
+							columnDef.report_docfield = copy_dict(docfield);
+						}
+						docfield = columnDef.report_docfield;
+
 						docfield.link_onclick =
 							repl('frappe.container.page.reportview.set_filter("%(fieldname)s", "%(value)s").run()',
 								{fieldname:docfield.fieldname, value:value});
@@ -297,12 +311,15 @@ frappe.views.ReportView = frappe.ui.Listing.extend({
 			.get(0), this.dataView,
 			columns, options);
 
-		this.grid.setSelectionModel(new Slick.CellSelectionModel());
-		this.grid.registerPlugin(new Slick.CellExternalCopyManager({
-			dataItemColumnValueExtractor: function(item, columnDef, value) {
-				return item[columnDef.field];
-			}
-		}));
+		if (!frappe.dom.is_touchscreen()) {
+			this.grid.setSelectionModel(new Slick.CellSelectionModel());
+			this.grid.registerPlugin(new Slick.CellExternalCopyManager({
+				dataItemColumnValueExtractor: function(item, columnDef, value) {
+					return item[columnDef.field];
+				}
+			}));
+		}
+
 		frappe.slickgrid_tools.add_property_setter_on_resize(this.grid);
 		if(this.start!=0 && !options.autoHeight) {
 			this.grid.scrollRowIntoView(this.data.length-1);
@@ -350,7 +367,6 @@ frappe.views.ReportView = frappe.ui.Listing.extend({
 			title: __("Edit") + " " + __(docfield.label),
 			fields: [docfield, {"fieldtype": "Button", "label": "Update"}],
 		});
-		d.get_input(docfield.fieldname).val(row[docfield.fieldname]);
 		d.get_input("update").on("click", function() {
 			var args = {
 				doctype: docfield.parent,
@@ -390,6 +406,7 @@ frappe.views.ReportView = frappe.ui.Listing.extend({
 			});
 		});
 		d.show();
+		d.set_input(docfield.fieldname, row[docfield.fieldname]);
 	},
 
 	set_data: function() {

@@ -25,8 +25,16 @@ frappe.views.FormFactory = frappe.views.Factory.extend({
 				frappe.ui.form.close_grid_form();
 			});
 
-			frappe.realtime.on("new_comment", function(data) {
-				frappe.model.new_comment(data);
+			frappe.realtime.on("new_communication", function(data) {
+				frappe.timeline.new_communication(data);
+			});
+
+			frappe.realtime.on("delete_communication", function(data) {
+				frappe.timeline.delete_communication(data);
+			});
+
+			frappe.realtime.on('update_communication', function(data) {
+				frappe.timeline.update_communication(data);
 			});
 
 			frappe.realtime.on("doc_viewers", function(data) {

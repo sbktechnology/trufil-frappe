@@ -108,6 +108,7 @@ a.badge-hover:active .badge {
   background-color: #D8DFE5;
 }
 .msgprint {
+  margin: 15px 0px;
   text-align: center;
 }
 .msgprint pre {
@@ -316,19 +317,30 @@ a.form-link {
 textarea.form-control {
   height: 120px;
 }
-ul.linked-with-list {
-  list-style: none;
-  margin: 0 0 20px 0;
-  padding: 0 0 0 0;
-}
-ul.linked-with-list li {
-  padding: 5px 0px;
-  border-bottom: 1px solid #d1d8dd;
+.link-select-row {
+  padding: 5px;
+  border-bottom: 1px solid #EBEFF2;
 }
 /* jquery ui */
+.ui-datepicker .ui-datepicker-header {
+  border-radius: 0px !important;
+}
 .ui-datepicker select.ui-datepicker-month,
 .ui-datepicker select.ui-datepicker-year {
   display: inline;
+}
+.ui-datepicker select.ui-datepicker-month {
+  margin-right: 3px;
+}
+.ui-datepicker .ui-datepicker-title {
+  line-height: inherit !important;
+  padding-bottom: 3px;
+}
+.ui-datepicker-today .ui-state-default {
+  background-color: #EBEFF2 !important;
+}
+.ui-state-default {
+  box-shadow: none !important;
 }
 .hidden-xs-inline,
 .hidden-xs-inline-block {
@@ -428,7 +440,6 @@ ul.linked-with-list li {
 }
 .open-notification {
   position: relative;
-  top: -2px;
   left: 2px;
   display: inline-block;
   background: #ff5858;
@@ -529,4 +540,12 @@ ul.linked-with-list li {
   margin-bottom: 0px;
   border-bottom: 1px solid #d1d8dd;
   border-radius: 0px;
+}
+.liked-by-popover {
+  min-width: 200px;
+  margin-top: -10px;
+  margin-bottom: -10px;
+}
+.liked-by-popover li {
+  margin: 15px 0px;
 }

@@ -26,9 +26,19 @@ frappe.views.ListFactory = frappe.views.Factory.extend({
 		});
 	},
 	show: function() {
+		this.set_module_breadcrumb();
 		this._super();
 		this.set_cur_list();
 		cur_list && cur_list.refresh();
+	},
+	set_module_breadcrumb: function() {
+		if(frappe.route_history.length > 1) {
+			var prev_route = frappe.route_history[frappe.route_history.length-2];
+			if(prev_route[0]==="modules") {
+				// save the last page from the breadcrumb was accessed
+				frappe.breadcrumbs.set_doctype_module(frappe.get_route()[1], prev_route[1]);
+			}
+		}
 	},
 	set_cur_list: function() {
 		var route = frappe.get_route();
@@ -115,7 +125,7 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 		this.setup_filterable();
 		this.init_filters();
 		this.init_headers();
-		this.init_star();
+		this.init_like();
 		this.init_select_all();
 	},
 
@@ -167,9 +177,9 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 			}
 		});
 		this.$page.find(".result-list").on("click", ".list-row-left", function(e) {
-			// don't open in case of checkbox, star, filterable
+			// don't open in case of checkbox, like, filterable
 			if ((e.target.className || "").indexOf("filterable")!==-1
-				|| (e.target.className || "").indexOf("icon-star")!==-1
+				|| (e.target.className || "").indexOf("octicon-heart")!==-1
 				|| e.target.type==="checkbox") {
 				return;
 			}
@@ -306,8 +316,8 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 			}
 		}
 
-		this.list_header.find(".list-starred-by-me")
-			.toggleClass("text-extra-muted not-starred", !this.is_star_filtered());
+		this.list_header.find(".list-liked-by-me")
+			.toggleClass("text-extra-muted not-liked", !this.is_star_filtered());
 
 		this.last_updated_on = new Date();
 		this.dirty = false;
@@ -354,10 +364,11 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 			filters: this.filter_list.get_filters(),
 			order_by: this.listview.order_by || undefined,
 			group_by: this.listview.group_by || undefined,
+			with_comment_count: true
 		}
 
 		// apply default filters, if specified for a listing
-		$.each((this.listview.default_filters || []), function(i, f) {
+		$.each((this.listview.default_filters || this.listview.settings.default_filters || []), function(i, f) {
 		      args.filters.push(f);
 		});
 
@@ -367,15 +378,15 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 		this.filter_list.add_filter(this.doctype, "_assign", 'like', '%' + user + '%');
 		this.run();
 	},
-	starred_by_me: function() {
-		this.filter_list.add_filter(this.doctype, "_starred_by", 'like', '%' + user + '%');
+	liked_by_me: function() {
+		this.filter_list.add_filter(this.doctype, "_liked_by", 'like', '%' + user + '%');
 		this.run();
 	},
-	remove_starred_by_me: function() {
-		this.filter_list.get_filter("_starred_by").remove();
+	remove_liked_by_me: function() {
+		this.filter_list.get_filter("_liked_by").remove();
 	},
 	is_star_filtered: function() {
-		return this.filter_list.filter_exists(this.doctype, "_starred_by", 'like', '%' + user + '%');
+		return this.filter_list.filter_exists(this.doctype, "_liked_by", 'like', '%' + user + '%');
 	},
 	init_menu: function() {
 		var me = this;
@@ -421,6 +432,19 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 			}, true);
 		}
 
+		this.make_bulk_assignment();
+		this.make_bulk_printing();
+
+		// add to desktop
+		this.page.add_menu_item(__("Add to Desktop"), function() {
+			frappe.add_to_desktop(me.doctype, me.doctype);
+		}, true);
+
+	},
+	make_bulk_assignment: function() {
+
+		var me = this;
+
 		//bulk assignment
 		me.page.add_menu_item(__("Assign To"), function(){
 
@@ -450,21 +474,73 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 				frappe.msgprint(__("Select records for assignment"))
 			}
 		}, true)
+
+	},
+	make_bulk_printing: function() {
+		var me = this;
+		//bulk priting
+		me.page.add_menu_item(__("Print"), function(){
+
+			docname = [];
+
+			$.each(me.get_checked_items(), function(i, doc){
+				docname.push(doc.name);
+			})
+
+			if(docname.length >= 1){
+
+				var dialog = new frappe.ui.Dialog({
+					title: "Print Documents",
+					fields: [
+						{"fieldtype": "Check", "label": __("With Letterhead"), "fieldname": "with_letterhead"},
+						{"fieldtype": "Select", "label": __("Print Format"), "fieldname": "print_sel"},
+					]
+				});
+
+				dialog.set_primary_action(__('Print'), function() {
+					args = dialog.get_values();
+					if(!args) return;
+					var default_print_format = locals.DocType[me.doctype].default_print_format;
+					with_letterhead = args.with_letterhead ? 1 : 0;
+					print_format = args.print_sel ? args.print_sel:default_print_format;
+
+					var json_string = JSON.stringify(docname);
+					var w = window.open("/api/method/frappe.templates.pages.print.download_multi_pdf?"
+						+"doctype="+encodeURIComponent(me.doctype)
+						+"&name="+encodeURIComponent(json_string)
+						+"&format="+encodeURIComponent(print_format)
+						+"&no_letterhead="+(with_letterhead ? "0" : "1"));
+					if(!w) {
+						msgprint(__("Please enable pop-ups")); return;
+					}
+
+				})
+
+				print_formats = frappe.meta.get_print_formats(me.doctype);
+				dialog.fields_dict.print_sel.$input.empty().add_options(print_formats);
+
+				dialog.show();
+			}
+			else{
+				frappe.msgprint(__("Select records for assignment"))
+			}
+		}, true);
 	},
 
-	init_star: function() {
+	init_like: function() {
 		var me = this;
-		this.$page.find(".result-list").on("click", ".star-action", function() {
-			frappe.ui.toggle_star($(this), me.doctype, $(this).attr("data-name"));
-			return false;
-		});
-		this.list_header.find(".list-starred-by-me").on("click", function() {
+		this.$page.find(".result-list").on("click", ".like-action", frappe.ui.click_toggle_like);
+		this.list_header.find(".list-liked-by-me").on("click", function() {
 			if (me.is_star_filtered()) {
-				me.remove_starred_by_me();
+				me.remove_liked_by_me();
 			} else {
-				me.starred_by_me();
+				me.liked_by_me();
 			}
 		});
+
+		if (!frappe.dom.is_touchscreen()) {
+			frappe.ui.setup_like_popover(this.$page.find(".result-list"), ".liked-by");
+		}
 	},
 
 	init_select_all: function() {
@@ -575,7 +651,7 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 				return false;
 			} else {
 				// second filter set for this field
-				if(fieldname=='_user_tags' || fieldname=="_starred_by") {
+				if(fieldname=='_user_tags' || fieldname=="_liked_by") {
 					// and for tags
 					this.filter_list.add_filter(this.doctype, fieldname, 'like', '%' + label);
 				} else {
@@ -586,7 +662,7 @@ frappe.views.DocListView = frappe.ui.Listing.extend({
 		} else {
 			// no filter for this item,
 			// setup one
-			if(fieldname=='_user_tags' || fieldname=="_starred_by") {
+			if(fieldname=='_user_tags' || fieldname=="_liked_by") {
 				this.filter_list.add_filter(this.doctype, fieldname, 'like', '%' + label);
 			} else {
 				this.filter_list.add_filter(this.doctype, fieldname, '=', label);

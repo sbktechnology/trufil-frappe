@@ -17,7 +17,7 @@ def get_data():
 					"type": "doctype",
 					"name": "Event",
 					"label": _("Calendar"),
-					"view": "Calendar",
+					"link": "Calendar/Event",
 					"description": _("Event and other calendars."),
 				},
 				{
@@ -25,7 +25,7 @@ def get_data():
 					"label": _("Messages"),
 					"name": "messages",
 					"description": _("Chat messages and other notifications."),
-					"data_doctype": "Comment"
+					"data_doctype": "Communication"
 				},
 				{
 					"type": "doctype",

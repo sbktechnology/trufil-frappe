@@ -62,13 +62,15 @@ _f.Frm.prototype.check_doctype_conflict = function(docname) {
 		msgprint(__('Allowing DocType, DocType. Be careful!'))
 	} else if(this.doctype=='DocType') {
 		if (frappe.views.formview[docname] || frappe.pages['List/'+docname]) {
-			msgprint(__("Cannot open {0} when its instance is open", ['DocType']))
-			throw 'doctype open conflict'
+			window.location.reload();
+			// msgprint(__("Cannot open {0} when its instance is open", ['DocType']))
+			// throw 'doctype open conflict'
 		}
 	} else {
 		if (frappe.views.formview.DocType && frappe.views.formview.DocType.frm.opendocs[this.doctype]) {
-			msgprint(__("Cannot open instance when its {0} is open", ['DocType']))
-			throw 'doctype open conflict'
+			window.location.reload();
+			// msgprint(__("Cannot open instance when its {0} is open", ['DocType']))
+			// throw 'doctype open conflict'
 		}
 	}
 }
@@ -143,7 +145,8 @@ _f.Frm.prototype.setup_drag_drop = function() {
 			frappe.upload.upload_file(dataTransfer.files[0], me.attachments.get_args(), {
 				callback: function(attachment, r) {
 					me.attachments.attachment_uploaded(attachment, r);
-				}
+				},
+				confirm_is_private: true
 			});
 		});
 }
@@ -170,6 +173,7 @@ _f.Frm.prototype.print_doc = function() {
 	}
 	this.print_preview.refresh_print_options().trigger("change");
 	this.page.set_view("print");
+	this.print_preview.set_user_lang()
 }
 
 _f.Frm.prototype.hide_print = function() {
@@ -361,7 +365,7 @@ _f.Frm.prototype.refresh = function(docname) {
 	}
 
 	cur_frm = this;
-
+	
 	if(this.docname) { // document to show
 
 		// set the doc
@@ -375,6 +379,9 @@ _f.Frm.prototype.refresh = function(docname) {
 
 		// read only (workflow)
 		this.read_only = frappe.workflow.is_read_only(this.doctype, this.docname);
+		
+		// set new doc name if created via link field
+		this.set_new_docname_from_link();
 
 		// check if doctype is already open
 		if (!this.opendocs[this.docname]) {
@@ -418,11 +425,27 @@ _f.Frm.prototype.refresh = function(docname) {
 	}
 }
 
+_f.Frm.prototype.set_new_docname_from_link = function() {
+	if(frappe._from_link && frappe._new_docname_from_link) {
+		frappe.model.set_value(frappe._from_link.doctype,
+			frappe._from_link.docname, frappe._from_link.df.fieldname, frappe._new_docname_from_link);
+
+		frappe._from_link.refresh();
+
+		frappe._from_link = null;
+		frappe._new_docname_from_link = null;
+	}
+}
+
 _f.Frm.prototype.show_if_needs_refresh = function() {
 	if(this.doc.__needs_refresh) {
-		this.dashboard.set_headline_alert(__("This form has been modified after you have loaded it")
-			+ '<a class="btn btn-xs btn-primary pull-right" onclick="cur_frm.reload_doc()">'
-			+ __("Refresh") + '</a>', "alert-warning");
+		if(this.doc.__unsaved) {
+			this.dashboard.set_headline_alert(__("This form has been modified after you have loaded it")
+				+ '<a class="btn btn-xs btn-primary pull-right" onclick="cur_frm.reload_doc()">'
+				+ __("Refresh") + '</a>', "alert-warning");
+		} else {
+			this.reload_doc();
+		}
 	}
 }
 
@@ -459,7 +482,7 @@ _f.Frm.prototype.render_form = function(is_a_different_doc) {
 		// focus on first input
 
 		if(this.doc.docstatus==0) {
-			var first = this.form_wrapper.find('.form-layout-row :input:first');
+			var first = this.form_wrapper.find('.form-layout :input:first');
 			if(!in_list(["Date", "Datetime"], first.attr("data-fieldtype"))) {
 				first.focus();
 			}
@@ -471,6 +494,8 @@ _f.Frm.prototype.render_form = function(is_a_different_doc) {
 	$(cur_frm.wrapper).trigger('render_complete');
 
 	this.layout.show_empty_form_message();
+
+	this.scroll_to_element();
 }
 
 _f.Frm.prototype.refresh_field = function(fname) {
@@ -511,7 +536,10 @@ _f.Frm.prototype.cleanup_refresh = function() {
 
 	if(me.meta.autoname && me.meta.autoname.substr(0,6)=='field:' && !me.doc.__islocal) {
 		var fn = me.meta.autoname.substr(6);
-		cur_frm.toggle_display(fn, false);
+
+		if (cur_frm.doc[fn]) {
+			cur_frm.toggle_display(fn, false);
+		}
 	}
 
 	if(me.meta.autoname=="naming_series:" && !me.doc.__islocal) {
@@ -652,11 +680,12 @@ _f.Frm.prototype._save = function(save_action, callback, btn, on_error) {
 
 		if(frappe._from_link) {
 			if(me.doctype===frappe._from_link.df.options) {
-				frappe._from_link.parse_validate_and_set_in_model(me.docname);
 				frappe.set_route("Form", frappe._from_link.frm.doctype, frappe._from_link.frm.docname);
+				
+				frappe._new_docname_from_link = me.docname;
+
 				setTimeout(function() { scroll(0, frappe._from_link_scrollY); }, 100);
 			}
-			frappe._from_link = null;
 		}
 	}
 
@@ -804,7 +833,7 @@ _f.Frm.prototype.reload_docinfo = function(callback) {
 		callback: function(r) {
 			// docinfo will be synced
 			if(callback) callback(r.docinfo);
-			me.comments.refresh();
+			me.timeline.refresh();
 			me.assign_to.refresh();
 			me.attachments.refresh();
 		}
@@ -826,8 +855,10 @@ _f.Frm.prototype.set_footnote = function(txt) {
 }
 
 
-_f.Frm.prototype.add_custom_button = function(label, fn, icon, toolbar_or_class) {
-	return this.page.add_inner_button(label, fn);
+_f.Frm.prototype.add_custom_button = function(label, fn, group) {
+	// temp! old parameter used to be icon
+	if(group && group.indexOf("icon")!==-1) group = null;
+	return this.page.add_inner_button(label, fn, group);
 }
 
 _f.Frm.prototype.clear_custom_buttons = function() {
@@ -871,4 +902,22 @@ _f.Frm.prototype.get_handlers = function(fieldname, doctype, docname) {
 
 _f.Frm.prototype.has_perm = function(ptype) {
 	return frappe.perm.has_perm(this.doctype, 0, ptype, this.doc);
+}
+
+_f.Frm.prototype.scroll_to_element = function() {
+	if (frappe.route_options && frappe.route_options.scroll_to) {
+		var scroll_to = frappe.route_options.scroll_to;
+		delete frappe.route_options.scroll_to;
+
+		var selector = [];
+		for (var key in scroll_to) {
+			var value = scroll_to[key];
+			selector.push(repl('[data-%(key)s="%(value)s"]', {key: key, value: value}));
+		}
+
+		selector = $(selector.join(" "));
+		if (selector.length) {
+			frappe.ui.scroll(selector, true, 30);
+		}
+	}
 }

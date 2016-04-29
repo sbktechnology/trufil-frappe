@@ -1,6 +1,6 @@
 email_defaults = {
 	"GMail": {
-		"pop3_server": "pop.gmail.com",
+		"email_server": "pop.gmail.com",
 		"use_ssl": 1,
 		"enable_outgoing": 1,
 		"smtp_server": "smtp.gmail.com",
@@ -8,7 +8,7 @@ email_defaults = {
 		"use_tls": 1
 	},
 	"Outlook.com": {
-		"pop3_server": "pop3.live.com",
+		"email_server": "pop3.live.com",
 		"use_ssl": 1,
 		"enable_outgoing": 1,
 		"smtp_server": "smtp.live.com",
@@ -16,7 +16,7 @@ email_defaults = {
 		"use_tls": 1
 	},
 	"Yahoo Mail": {
-		"pop3_server": "pop.mail.yahoo.com",
+		"email_server": "pop.mail.yahoo.com",
 		"use_ssl": 1,
 		"enable_outgoing": 1,
 		"smtp_server": "smtp.mail.yahoo.com",
@@ -24,7 +24,7 @@ email_defaults = {
 		"use_tls": 1
 	},
 	"Yandex.Mail": {
-		"pop3_server": "pop.yandex.com",
+		"email_server": "pop.yandex.com",
 		"use_ssl": 1,
 		"enable_outgoing": 1,
 		"smtp_server": "smtp.yandex.com",
@@ -33,11 +33,45 @@ email_defaults = {
 	},
 };
 
+email_defaults_imap = {
+	"GMail": {
+		"email_server": "imap.gmail.com"
+	},
+	"Outlook.com": {
+		"email_server": "imap.live.com"
+	},
+	"Yahoo Mail": {
+		"email_server": "imap.mail.yahoo.com"
+	},
+	"Yandex.Mail": {
+		"email_server": "imap.yandex.com"
+	},
+
+};
+
 frappe.ui.form.on("Email Account", {
 	service: function(frm) {
 		$.each(email_defaults[frm.doc.service], function(key, value) {
 			frm.set_value(key, value);
 		})
+		if (frm.doc.use_imap) {
+			$.each(email_defaults_imap[frm.doc.service], function(key, value) {
+				frm.set_value(key, value);
+			});
+		}
+		frm.events.show_gmail_message_for_less_secure_apps(frm);
+	},
+	use_imap: function(frm) {
+		if (frm.doc.use_imap) {
+			$.each(email_defaults_imap[frm.doc.service], function(key, value) {
+				frm.set_value(key, value);
+			});
+		}
+		else{
+			$.each(email_defaults[frm.doc.service], function(key, value) {
+				frm.set_value(key, value);
+			});
+		}
 	},
 	email_id: function(frm) {
 		if(!frm.doc.email_account_name) {
@@ -59,5 +93,14 @@ frappe.ui.form.on("Email Account", {
 	refresh: function(frm) {
 		frm.events.enable_incoming(frm);
 		frm.events.notify_if_unreplied(frm);
-	}
+		frm.events.show_gmail_message_for_less_secure_apps(frm);
+	},
+	show_gmail_message_for_less_secure_apps: function(frm) {
+		frm.dashboard.reset();
+		if(frm.doc.service==="GMail") {
+			frm.dashboard.set_headline_alert('GMail will only work if you allows access for Less Secure \
+				Apps in GMail Settings. <a target="_blank" \
+				href="https://support.google.com/accounts/answer/6010255?hl=en">Read this for details</a>');
+		}
+	},
 });

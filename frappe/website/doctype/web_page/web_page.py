@@ -4,13 +4,14 @@
 from __future__ import unicode_literals
 import frappe, re, os, json, imp
 import requests, requests.exceptions
+from frappe.utils import strip_html, markdown
 from frappe.website.website_generator import WebsiteGenerator
 from frappe.website.router import resolve_route
 from frappe.website.doctype.website_slideshow.website_slideshow import get_slideshow
-from frappe.website.utils import find_first_image, get_comment_list
-from markdown2 import markdown
+from frappe.website.utils import find_first_image, get_comment_list, get_full_index
 from frappe.utils.jinja import render_template
 from jinja2.exceptions import TemplateSyntaxError
+from frappe import _
 
 class WebPage(WebsiteGenerator):
 	save_versions = True
@@ -51,8 +52,10 @@ class WebPage(WebsiteGenerator):
 			# render dynamic context (if .py file exists)
 
 			# get absolute template path considering first fragment as app name
-			split_path = self.template_path.split(os.sep)
-			self.template_path = os.path.join(frappe.get_app_path(split_path[0]), *split_path[1:])
+			if not self.template_path.startswith(os.sep):
+				split_path = self.template_path.split(os.sep)
+
+				self.template_path = os.path.join(frappe.get_app_path(split_path[0]), *split_path[1:])
 
 			context = self.get_dynamic_context(frappe._dict(context))
 
@@ -74,6 +77,9 @@ class WebPage(WebsiteGenerator):
 				context["no_header"] = 1
 
 		self.set_metatags(context)
+		self.set_breadcrumbs(context)
+		self.set_title_and_header(context)
+		self.add_index(context)
 
 		return context
 
@@ -90,23 +96,96 @@ class WebPage(WebsiteGenerator):
 				if is_jinja:
 					raise
 
+	def set_breadcrumbs(self, context):
+		"""Build breadcrumbs template (deprecated)"""
+		if not "no_breadcrumbs" in context:
+			if "<!-- no-breadcrumbs -->" in context.main_section:
+				context.no_breadcrumbs = 1
+
+	def set_title_and_header(self, context):
+		"""Extract and set title and header from content or context."""
+		if not "no_header" in context:
+			if "<!-- no-header -->" in context.main_section:
+				context.no_header = 1
+
+		if "<!-- title:" in context.main_section:
+			context.title = re.findall('<!-- title:([^>]*) -->', context.main_section)[0].strip()
+
+		if context.get("page_titles") and context.page_titles.get(context.pathname):
+			context.title = context.page_titles.get(context.pathname)[0]
+
+		# header
+		if context.no_header and "header" in context:
+			context.header = ""
+
+		if not context.no_header:
+			# if header not set and no h1 tag in the body, set header as title
+			if not context.header and "<h1" not in context.main_section:
+				context.header = context.title
+
+			# add h1 tag to header
+			if context.get("header") and not re.findall("<h.>", context.header):
+				context.header = "<h1>" + context.header + "</h1>"
+
+		# if title not set, set title from header
+		if not context.title and context.header:
+			context.title = strip_html(context.header)
+
+	def add_index(self, context):
+		"""Add index, next button if `{index}`, `{next}` is present."""
+		# table of contents
+
+		extn = ""
+		if context.page_links_with_extn:
+			extn = ".html"
+
+		if "{index}" in context.main_section and context.get("children") and len(context.children):
+			full_index = get_full_index(context.pathname, extn = extn)
+
+			if full_index:
+				html = frappe.get_template("templates/includes/full_index.html").render({
+					"full_index": full_index,
+					"url_prefix": context.url_prefix
+				})
+
+				context.main_section = context.main_section.replace("{index}", html)
+
+		# next and previous
+		if "{next}" in context.main_section:
+			next_item = self.get_next()
+			next_item.extn = "" if self.has_children(next_item.name) else extn
+			if next_item and next_item.page_name:
+				if context.relative_links:
+					if next_item.next_parent:
+						next_item.name = "../" + next_item.page_name or ""
+					else:
+						next_item.name = next_item.page_name or ""
+				else:
+					if next_item and next_item.name and next_item.name[0]!="/":
+						next_item.name = "/" + next_item.name
+
+				if not next_item.title:
+					next_item.title = ""
+				html = ('<p class="btn-next-wrapper">'+_("Next")\
+					+': <a class="btn-next" href="{name}{extn}">{title}</a></p>').format(**next_item)
+			else:
+				html = ""
+
+			context.main_section = context.main_section.replace("{next}", html)
+
+	def add_hero(self, context):
+		"""Add a hero element if specified in content or hooks.
+		Hero elements get full page width."""
+		context.hero = ""
+		if "<!-- start-hero -->" in context.main_section:
+			parts1 = context.main_section.split("<!-- start-hero -->")
+			parts2 = parts1[1].split("<!-- end-hero -->")
+			context.main_section = parts1[0] + parts2[1]
+			context.hero = parts2[0]
+
 	def get_static_content(self, context):
-
 		with open(self.template_path, "r") as contentfile:
-			content = unicode(contentfile.read(), 'utf-8')
-
-			if self.template_path.endswith(".md"):
-				if content:
-					lines = content.splitlines()
-					first_line = lines[0].strip()
-
-					if first_line.startswith("# "):
-						context.title = first_line[2:]
-						content = "\n".join(lines[1:])
-
-					content = markdown(content)
-
-			context.main_section = unicode(content.encode("utf-8"), 'utf-8')
+			context.main_section = unicode(contentfile.read(), 'utf-8')
 
 			self.check_for_redirect(context)
 
@@ -114,6 +193,17 @@ class WebPage(WebsiteGenerator):
 				context.title = self.name.replace("-", " ").replace("_", " ").title()
 
 			self.render_dynamic(context)
+
+			if self.template_path.endswith(".md"):
+				if context.main_section:
+					lines = context.main_section.splitlines()
+					first_line = lines[0].strip()
+
+					if first_line.startswith("# "):
+						context.title = first_line[2:]
+						context.main_section = "\n".join(lines[1:])
+
+					context.main_section = markdown(context.main_section, sanitize=False)
 
 		for extn in ("js", "css"):
 			fpath = self.template_path.rsplit(".", 1)[0] + "." + extn
@@ -151,28 +241,12 @@ class WebPage(WebsiteGenerator):
 	def set_metatags(self, context):
 		context.metatags = {
 			"name": context.title,
-			"description": (context.description or context.main_section or "").replace("\n", " ")[:500]
+			"description": (context.description or "").replace("\n", " ")[:500]
 		}
 
 		image = find_first_image(context.main_section or "")
 		if image:
 			context.metatags["image"] = image
-
-# def get_list_context(context=None):
-# 	list_context = frappe._dict(
-# 		title = _("Website Search"),
-# 		template = "templates/includes/kb_list.html",
-# 		row_template = "templates/includes/kb_row.html",
-# 		get_level_class = get_level_class,
-# 		hide_filters = True,
-# 		filters = {"published": 1}
-# 	)
-#
-# 	if frappe.local.form_dict.txt:
-# 		list_context.subtitle = _('Filtered by "{0}"').format(frappe.local.form_dict.txt)
-# 	#
-# 	# list_context.update(frappe.get_doc("Blog Settings", "Blog Settings").as_dict())
-# 	return list_context
 
 def check_broken_links():
 	cnt = 0

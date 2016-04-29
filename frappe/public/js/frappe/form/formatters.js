@@ -55,9 +55,9 @@ frappe.form.formatters = {
 	},
 	Check: function(value) {
 		if(value) {
-			return '<i class="octicon octicon-check" style="margin-right: 8px;"></i>';
+			return '<i class="octicon octicon-check" style="margin-right: 3px;"></i>';
 		} else {
-			return '<i class="icon-check-empty text-extra-muted" style="margin-right: 8px;"></i>';
+			return '<i class="icon-ban-circle text-extra-muted" style="margin-right: 3px;"></i>';
 		}
 	},
 	Link: function(value, docfield, options) {
@@ -85,7 +85,15 @@ frappe.form.formatters = {
 		}
 	},
 	Date: function(value) {
-		return value ? dateutil.str_to_user(value) : "";
+		if (value) {
+			value = dateutil.str_to_user(value);
+			// handle invalid date
+			if (value==="Invalid date") {
+				value = null;
+			}
+		}
+
+		return value || "";
 	},
 	Datetime: function(value) {
 		return value ? dateutil.str_to_user(dateutil.convert_to_user_tz(value)) : "";
@@ -109,7 +117,7 @@ frappe.form.formatters = {
 
 		return frappe.form.formatters.Data(value);
 	},
-	StarredBy: function(value) {
+	LikedBy: function(value) {
 		var html = "";
 		$.each(JSON.parse(value || "[]"), function(i, v) {
 			if(v) html+= '<span class="avatar avatar-small" \
@@ -194,7 +202,7 @@ frappe.format = function(value, df, options, doc) {
 	var formatted = formatter(value, df, options, doc);
 
 	if (typeof formatted == "string")
-		formatted = frappe.utils.remove_script_and_style(formatted);
+		formatted = frappe.dom.remove_script_and_style(formatted);
 
 	return formatted;
 }

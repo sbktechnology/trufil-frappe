@@ -40,7 +40,13 @@ frappe.search = {
 				if(ui.item.onclick) {
 					ui.item.onclick(ui.item.match);
 				} else {
+					var previous_hash = window.location.hash;
 					frappe.set_route(ui.item.route);
+
+					// hashchange didn't fire!
+					if (window.location.hash == previous_hash) {
+						frappe.route();
+					}
 				}
 				$(this).val('');
 				return false;
@@ -215,11 +221,17 @@ frappe.search.verbs = [
 	// reports
 	function(txt) {
 		frappe.search.find(keys(frappe.boot.user.all_reports), txt, function(match) {
-			var report_type = frappe.boot.user.all_reports[match];
+			var report = frappe.boot.user.all_reports[match];
+			var route = [];
+			if(report.report_type == "Report Builder")
+				route = ["Report", report.ref_doctype, match];
+			else 
+				route = ["query-report",  match];
+			
 			return {
 				label: __("Report {0}", ["<b>"+__(match)+"</b>"]),
 				value: __("Report {0}", [__(match)]),
-				route: [report_type=="Report Builder" ? "Report" : "query-report", match]
+				route: route
 			}
 		});
 	},

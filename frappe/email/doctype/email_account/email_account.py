@@ -3,17 +3,22 @@
 
 from __future__ import unicode_literals
 import frappe
+import imaplib
+import re
+import socket
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import validate_email_add, cint, get_datetime, DATE_FORMAT, strip, comma_or
+from frappe.utils import validate_email_add, cint, get_datetime, DATE_FORMAT, strip, comma_or, sanitize_html
 from frappe.utils.user import is_system_user
 from frappe.utils.jinja import render_template
 from frappe.email.smtp import SMTPServer
-from frappe.email.receive import POP3Server, Email
+from frappe.email.receive import EmailServer, Email
 from poplib import error_proto
-import re
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, timedelta
+from frappe.desk.form import assign_to
+from frappe.utils.user import get_system_managers
+from frappe.core.doctype.communication.email import set_incoming_outgoing_accounts
 
 class SentEmailInInbox(Exception): pass
 
@@ -30,7 +35,7 @@ class EmailAccount(Document):
 		self.name = self.email_account_name
 
 	def validate(self):
-		"""Validate email id and check POP3 and SMTP connections is enabled."""
+		"""Validate email id and check POP3/IMAP and SMTP connections is enabled."""
 		if self.email_id:
 			validate_email_add(self.email_id, True)
 
@@ -48,7 +53,7 @@ class EmailAccount(Document):
 
 		if not frappe.local.flags.in_install and not frappe.local.flags.in_patch:
 			if self.enable_incoming:
-				self.get_pop3()
+				self.get_server()
 
 			if self.enable_outgoing:
 				self.check_smtp()
@@ -96,34 +101,77 @@ class EmailAccount(Document):
 			)
 			server.sess
 
-	def get_pop3(self):
+	def get_server(self, in_receive=False):
 		"""Returns logged in POP3 connection object."""
 		args = {
-			"host": self.pop3_server,
+			"host": self.email_server,
 			"use_ssl": self.use_ssl,
 			"username": getattr(self, "login_id", None) or self.email_id,
-			"password": self.password
+			"password": self.password,
+			"use_imap": self.use_imap
 		}
 
-		if not self.pop3_server:
-			frappe.throw(_("{0} is required").format("POP3 Server"))
+		if not args.get("host"):
+			frappe.throw(_("{0} is required").format("Email Server"))
 
-		pop3 = POP3Server(frappe._dict(args))
+		email_server = EmailServer(frappe._dict(args))
 		try:
-			pop3.connect()
-		except error_proto, e:
-			frappe.throw(e.message)
+			email_server.connect()
+		except (error_proto, imaplib.IMAP4.error), e:
+			if in_receive and ("authentication failed" in e.message.lower() or "log in via your web browser" in e.message.lower()):
+				# if called via self.receive and it leads to authentication error, disable incoming
+				# and send email to system manager
+				self.handle_incoming_connect_error(
+					description=_('Authentication failed while receiving emails from Email Account {0}. Message from server: {1}'.format(self.name, e.message))
+				)
 
-		return pop3
+				return None
+
+			else:
+				frappe.throw(e.message)
+
+		except socket.error:
+			if in_receive:
+				# timeout while connecting, see receive.py connect method
+				description = frappe.message_log.pop() if frappe.message_log else "Socket Error"
+				self.handle_incoming_connect_error(description=description)
+
+				return None
+
+			else:
+				raise
+
+		return email_server
+
+	def handle_incoming_connect_error(self, description):
+		self.db_set("enable_incoming", 0)
+
+		for user in get_system_managers(only_name=True):
+			try:
+				assign_to.add({
+					'assign_to': user,
+					'doctype': self.doctype,
+					'name': self.name,
+					'description': description,
+					'priority': 'High',
+					'notify': 1
+				})
+			except assign_to.DuplicateToDoError:
+				frappe.message_log.pop()
+				pass
+
 
 	def receive(self, test_mails=None):
-		"""Called by scheduler to receive emails from this EMail account using POP3."""
+		"""Called by scheduler to receive emails from this EMail account using POP3/IMAP."""
 		if self.enable_incoming:
 			if frappe.local.flags.in_test:
 				incoming_mails = test_mails
 			else:
-				pop3 = self.get_pop3()
-				incoming_mails = pop3.get_messages()
+				email_server = self.get_server(in_receive=True)
+				if not email_server:
+					return
+
+				incoming_mails = email_server.get_messages()
 
 			exceptions = []
 			for raw in incoming_mails:
@@ -168,22 +216,26 @@ class EmailAccount(Document):
 
 		self.set_thread(communication, email)
 
+		communication.flags.in_receive = True
 		communication.insert(ignore_permissions = 1)
 
 		# save attachments
 		communication._attachments = email.save_attachments_in_doc(communication)
 
 		# replace inline images
+
+
 		dirty = False
 		for file in communication._attachments:
 			if file.name in email.cid_map and email.cid_map[file.name]:
 				dirty = True
-				communication.content = communication.content.replace("cid:{0}".format(email.cid_map[file.name]),
+
+				email.content = email.content.replace("cid:{0}".format(email.cid_map[file.name]),
 					file.file_url)
 
 		if dirty:
 			# not sure if using save() will trigger anything
-			communication.db_set("content", communication.content)
+			communication.db_set("content", sanitize_html(email.content))
 
 		# notify all participants of this thread
 		if self.enable_auto_reply and getattr(communication, "is_first", False):
@@ -286,7 +338,7 @@ class EmailAccount(Document):
 	def send_auto_reply(self, communication, email):
 		"""Send auto reply if set."""
 		if self.enable_auto_reply:
-			communication.set_incoming_outgoing_accounts()
+			set_incoming_outgoing_accounts(communication)
 
 			frappe.sendmail(recipients = [email.from_email],
 				sender = self.email_id,
@@ -297,18 +349,22 @@ class EmailAccount(Document):
 				reference_doctype = communication.reference_doctype,
 				reference_name = communication.reference_name,
 				message_id = communication.name,
+				in_reply_to = email.mail.get("Message-Id"), # send back the Message-Id as In-Reply-To
 				unsubscribe_message = _("Leave this conversation"),
 				bulk=True)
 
 	def get_unreplied_notification_emails(self):
 		"""Return list of emails listed"""
 		self.send_notification_to = self.send_notification_to.replace(",", "\n")
-		out = [e.strip() for e in self.send_notification_to.split("\n")]
+		out = [e.strip() for e in self.send_notification_to.split("\n") if e.strip()]
 		return out
 
 	def on_trash(self):
 		"""Clear communications where email account is linked"""
 		frappe.db.sql("update `tabCommunication` set email_account='' where email_account=%s", self.name)
+
+	def after_rename(self, old, new, merge=False):
+		frappe.db.set_value("Email Account", new, "email_account_name", new)
 
 @frappe.whitelist()
 def get_append_to(doctype=None, txt=None, searchfield=None, start=None, page_len=None, filters=None):
@@ -316,10 +372,9 @@ def get_append_to(doctype=None, txt=None, searchfield=None, start=None, page_len
 	return [[d] for d in frappe.get_hooks("email_append_to") if txt in d]
 
 def pull(now=False):
-	"""Will be called via scheduler, pull emails from all enabled POP3 email accounts."""
+	"""Will be called via scheduler, pull emails from all enabled Email accounts."""
 	import frappe.tasks
 	for email_account in frappe.get_list("Email Account", filters={"enable_incoming": 1}):
-		#frappe.tasks.pull_from_email_account(frappe.local.site, email_account.name)
 		if now:
 			frappe.tasks.pull_from_email_account(frappe.local.site, email_account.name)
 		else:

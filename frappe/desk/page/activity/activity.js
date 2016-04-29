@@ -18,36 +18,73 @@ frappe.pages['activity'].on_page_load = function(wrapper) {
 
 	this.page.set_title(__("Activity"));
 
-	this.page.list = new frappe.ui.Listing({
-		hide_refresh: true,
-		page: this.page,
-		method: 'frappe.desk.page.activity.activity.get_feed',
-		parent: $("<div></div>").appendTo(this.page.main),
-		render_row: function(row, data) {
-			new frappe.activity.Feed(row, data);
-		}
-	});
+	frappe.model.with_doctype("Communication", function() {
+		me.page.list = new frappe.ui.Listing({
+			hide_refresh: true,
+			page: me.page,
+			method: 'frappe.desk.page.activity.activity.get_feed',
+			parent: $("<div></div>").appendTo(me.page.main),
+			render_row: function(row, data) {
+				new frappe.activity.Feed(row, data);
+			},
+			show_filters: true,
+			doctype: "Communication",
+ 			get_args: function() {
+				if (frappe.route_options && frappe.route_options.show_likes) {
+					delete frappe.route_options.show_likes;
+					return {
+						show_likes: true
+					}
+				} else {
+					return {}
+				}
+			}
+		});
 
-	this.page.list.run();
+		me.page.list.run();
+
+		me.page.set_primary_action(__("Refresh"), function() {
+			me.page.list.filter_list.clear_filters();
+			me.page.list.run();
+		}, "octicon octicon-sync");
+	});
 
 	frappe.activity.render_plot(this.page);
 
 	this.page.main.on("click", ".activity-message", function() {
-		var doctype = $(this).attr("data-doctype"),
+		var link_doctype = $(this).attr("data-link-doctype"),
+			link_name = $(this).attr("data-link-name"),
+			doctype = $(this).attr("data-doctype"),
 			docname = $(this).attr("data-docname");
+
 		if (doctype && docname) {
-			frappe.set_route(["Form", doctype, docname]);
+			if (link_doctype && link_name) {
+				frappe.route_options = {
+					scroll_to: { "doctype": doctype, "name": docname }
+				}
+			}
+
+			frappe.set_route(["Form", link_doctype || doctype, link_name || docname]);
 		}
 	});
 
-	this.page.set_primary_action(__("Refresh"), function() { me.page.list.run(); }, "octicon octicon-sync");
-
 	// Build Report Button
 	if(frappe.boot.user.can_get_report.indexOf("Feed")!=-1) {
-		this.page.set_secondary_action(__('Build Report'), function() {
+		this.page.add_menu_item(__('Build Report'), function() {
 			frappe.set_route('Report', "Feed");
-		}, 'icon-th');
+		}, 'icon-th')
 	}
+
+	this.page.add_menu_item(__('Show Likes'), function() {
+		frappe.route_options = {
+			show_likes: true
+		};
+		me.page.list.run();
+	}, 'octicon octicon-heart');
+};
+
+frappe.pages['activity'].on_page_show = function() {
+	frappe.breadcrumbs.add("Desk");
 }
 
 frappe.activity.last_feed_date = false;
@@ -59,9 +96,23 @@ frappe.activity.Feed = Class.extend({
 			data.add_class = "label-default";
 
 		data.link = "";
-		if (data.doc_type && data.doc_name) {
-			data.link = frappe.format(data.doc_name, {fieldtype: "Link", options: data.doc_type},
-				{label: __(data.doc_type) + " " + __(data.doc_name)});
+		if (data.link_doctype && data.link_name) {
+			data.link = frappe.format(data.link_name, {fieldtype: "Link", options: data.link_doctype},
+				{label: __(data.link_doctype) + " " + __(data.link_name)});
+
+		} else if (data.feed_type==="Comment" && data.comment_type==="Comment") {
+			// hack for backward compatiblity
+			data.link_doctype = data.reference_doctype;
+			data.link_name = data.reference_name;
+			data.reference_doctype = "Communication";
+			data.reference_name = data.name;
+
+			data.link = frappe.format(data.link_name, {fieldtype: "Link", options: data.link_doctype},
+				{label: __(data.link_doctype) + " " + __(data.link_name)});
+
+		} else if (data.reference_doctype && data.reference_name) {
+			data.link = frappe.format(data.reference_name, {fieldtype: "Link", options: data.reference_doctype},
+				{label: __(data.reference_doctype) + " " + __(data.reference_name)});
 		}
 
 		$(row)
@@ -69,26 +120,20 @@ frappe.activity.Feed = Class.extend({
 			.find("a").addClass("grey");
 	},
 	scrub_data: function(data) {
-		data.by = frappe.user_info(data.owner).fullname;
+		data.by = frappe.user.full_name(data.owner);
 		data.imgsrc = frappe.utils.get_file_link(frappe.user_info(data.owner).image);
 
 		data.icon = "icon-flag";
-		// if(data.doc_type) {
-		// 	data.feed_type = data.doc_type;
-		// 	data.icon = frappe.boot.doctype_icons[data.doc_type];
-		// }
-
-		// data.feed_type = data.feed_type || "Comment";
 
 		// color for comment
 		data.add_class = {
 			"Comment": "label-danger",
 			"Assignment": "label-warning",
 			"Login": "label-default"
-		}[data.feed_type] || "label-info"
+		}[data.comment_type || data.communication_medium] || "label-info"
 
 		data.when = comment_when(data.creation);
-		data.feed_type = __(data.feed_type);
+		data.feed_type = data.comment_type || data.communication_medium;
 	},
 	add_date_separator: function(row, data) {
 		var date = dateutil.str_to_obj(data.creation);

@@ -22,13 +22,35 @@ def get_jenv():
 def get_template(path):
 	return get_jenv().get_template(path)
 
+def validate_template(html):
+	"""Throws exception if there is a syntax error in the Jinja Template"""
+	import frappe
+	from jinja2 import TemplateSyntaxError
+
+	jenv = get_jenv()
+	try:
+		jenv.from_string(html)
+	except TemplateSyntaxError, e:
+		frappe.msgprint('Line {}: {}'.format(e.lineno, e.message))
+		frappe.throw(frappe._("Syntax error in template"))
+
 def render_template(template, context, is_path=None):
-	if is_path or template.startswith("templates/"):
+	'''Render a template using Jinja
+
+	:param template: path or HTML containing the jinja template
+	:param context: dict of properties to pass to the template
+	:param is_path: (optional) assert that the `template` parameter is a path'''
+
+	# if it ends with .html then its a freaking path, not html
+	if (is_path
+		or template.startswith("templates/")
+		or (template.endswith('.html') and '\n' not in template)):
 		return get_jenv().get_template(template).render(context)
 	else:
 		return get_jenv().from_string(template).render(context)
 
 def get_allowed_functions_for_jenv():
+	import os
 	import frappe
 	import frappe.utils
 	import frappe.utils.data
@@ -65,6 +87,7 @@ def get_allowed_functions_for_jenv():
 			"get_doc": frappe.get_doc,
 			"db": {
 				"get_value": frappe.db.get_value,
+				"get_default": frappe.db.get_default,
 			},
 			"get_list": frappe.get_list,
 			"get_all": frappe.get_all,
@@ -86,7 +109,8 @@ def get_allowed_functions_for_jenv():
 		"_": frappe._,
 		"get_shade": get_shade,
 		"scrub": scrub,
-		"guess_mimetype": mimetypes.guess_type
+		"guess_mimetype": mimetypes.guess_type,
+		"dev_server": 1 if os.environ.get('DEV_SERVER', False) else 0
 	}
 
 def get_jloader():
@@ -95,6 +119,7 @@ def get_jloader():
 		from jinja2 import ChoiceLoader, PackageLoader, PrefixLoader
 
 		apps = frappe.get_installed_apps(sort=True)
+
 		apps.reverse()
 
 		frappe.local.jloader = ChoiceLoader(
@@ -111,9 +136,8 @@ def get_jloader():
 
 def set_filters(jenv):
 	import frappe
-	from frappe.utils import global_date_format, cint, cstr, flt
+	from frappe.utils import global_date_format, cint, cstr, flt, markdown
 	from frappe.website.utils import get_shade, abs_url
-	from markdown2 import markdown
 
 	jenv.filters["global_date_format"] = global_date_format
 	jenv.filters["markdown"] = markdown

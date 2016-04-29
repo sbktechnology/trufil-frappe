@@ -147,7 +147,7 @@ def update_share_permissions(role_permissions, doc, user):
 		for ptype in share_ptypes:
 			if permissions_by_share[ptype]:
 				role_permissions[ptype] = 1
-		
+
 def get_role_permissions(meta, user=None, verbose=False):
 	"""Returns dict of evaluated role permissions like `{"read": True, "write":False}`
 
@@ -294,10 +294,12 @@ def has_controller_permissions(doc, ptype, user=None):
 		return None
 
 	for method in methods:
-		if not frappe.call(frappe.get_attr(method), doc=doc, ptype=ptype, user=user):
-			return False
+		controller_permission = frappe.call(frappe.get_attr(method), doc=doc, ptype=ptype, user=user)
+		if controller_permission is not None:
+			return controller_permission
 
-	return True
+	# controller permissions could not decide on True or False
+	return None
 
 def can_set_user_permissions(doctype, docname=None):
 	# System Manager can always set user permissions

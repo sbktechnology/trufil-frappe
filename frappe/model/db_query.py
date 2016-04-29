@@ -18,19 +18,35 @@ class DatabaseQuery(object):
 		self.tables = []
 		self.conditions = []
 		self.or_conditions = []
-		self.fields = ["`tab{0}`.`name`".format(doctype)]
+		self.fields = None
 		self.user = None
 		self.flags = frappe._dict()
 
 	def execute(self, query=None, fields=None, filters=None, or_filters=None,
 		docstatus=None, group_by=None, order_by=None, limit_start=False,
 		limit_page_length=None, as_list=False, with_childnames=False, debug=False,
-		ignore_permissions=False, user=None):
+		ignore_permissions=False, user=None, with_comment_count=False):
 		if not ignore_permissions and not frappe.has_permission(self.doctype, "read", user=user):
 			raise frappe.PermissionError, self.doctype
 
+		# fitlers and fields swappable
+		# its hard to remember what comes first
+		if isinstance(fields, dict):
+			# if fields is given as dict, its probably filters
+			self.filters = fields
+			fields = None
+
+		if self.fields and isinstance(filters, list) \
+			and len(filters) > 1 and isinstance(filters[0], basestring):
+			# if `filters` is a list of strings, its probably fields
+			self.fields = filters
+			filters = None
+
 		if fields:
 			self.fields = fields
+		else:
+			self.fields =  ["`tab{0}`.`name`".format(self.doctype)]
+
 		self.filters = filters or []
 		self.or_filters = or_filters or []
 		self.docstatus = docstatus or []
@@ -45,9 +61,14 @@ class DatabaseQuery(object):
 		self.user = user or frappe.session.user
 
 		if query:
-			return self.run_custom_query(query)
+			result = self.run_custom_query(query)
 		else:
-			return self.build_and_run()
+			result = self.build_and_run()
+
+		if with_comment_count and not as_list and self.doctype:
+			self.add_comment_count(result)
+
+		return result
 
 	def build_and_run(self):
 		args = self.prepare_args()
@@ -226,7 +247,7 @@ class DatabaseQuery(object):
 			if not isinstance(values, (list, tuple)):
 				values = values.split(",")
 
-			values = (frappe.db.escape(v.strip()) for v in values)
+			values = (frappe.db.escape(v.strip(), percent=False) for v in values)
 			values = '("{0}")'.format('", "'.join(values))
 
 			condition = 'ifnull({tname}.{fname}, "") {operator} {value}'.format(
@@ -253,9 +274,9 @@ class DatabaseQuery(object):
 					value = "" if f.value==None else f.value
 					fallback = '""'
 
-					if f.operator == "like" and isinstance(value, basestring):
+					if f.operator in ("like", "not like") and isinstance(value, basestring):
 						# because "like" uses backslash (\) for escaping
-						value = value.replace("\\", "\\\\")
+						value = value.replace("\\", "\\\\").replace("%", "%%")
 
 			else:
 				value = flt(f.value)
@@ -263,14 +284,13 @@ class DatabaseQuery(object):
 
 			# put it inside double quotes
 			if isinstance(value, basestring):
-				value = '"{0}"'.format(frappe.db.escape(value))
+				value = '"{0}"'.format(frappe.db.escape(value, percent=False))
 
 			condition = 'ifnull({tname}.{fname}, {fallback}) {operator} {value}'.format(
 				tname=tname, fname=f.fieldname, fallback=fallback, operator=f.operator,
 				value=value)
 
-		# replace % with %% to prevent python format string error
-		return condition.replace("%", "%%")
+		return condition
 
 	def get_filter(self, f):
 		"""Returns a _dict like
@@ -341,7 +361,7 @@ class DatabaseQuery(object):
 
 			if role_permissions.get("if_owner", {}).get("read"):
 				self.match_conditions.append("`tab{0}`.owner = '{1}'".format(self.doctype,
-					frappe.db.escape(frappe.session.user)))
+					frappe.db.escape(frappe.session.user, percent=False)))
 
 		if as_condition:
 			conditions = ""
@@ -358,15 +378,14 @@ class DatabaseQuery(object):
 				conditions =  "({conditions}) or ({shared_condition})".format(
 					conditions=conditions, shared_condition=self.get_share_condition())
 
-			# replace % with %% to prevent python format string error
-			return conditions.replace("%", "%%")
+			return conditions
 
 		else:
 			return self.match_filters
 
 	def get_share_condition(self):
 		return """`tab{0}`.name in ({1})""".format(self.doctype, ", ".join(["'%s'"] * len(self.shared))) % \
-			tuple([frappe.db.escape(s) for s in self.shared])
+			tuple([frappe.db.escape(s, percent=False) for s in self.shared])
 
 	def add_user_permissions(self, user_permissions, user_permission_doctypes=None):
 		user_permission_doctypes = frappe.permissions.get_user_permission_doctypes(user_permission_doctypes, user_permissions)
@@ -383,7 +402,7 @@ class DatabaseQuery(object):
 				if user_permission_values:
 					condition += """ or `tab{doctype}`.`{fieldname}` in ({values})""".format(
 						doctype=self.doctype, fieldname=df.fieldname,
-						values=", ".join([('"'+frappe.db.escape(v)+'"') for v in user_permission_values])
+						values=", ".join([('"'+frappe.db.escape(v, percent=False)+'"') for v in user_permission_values])
 					)
 				match_conditions.append("({condition})".format(condition=condition))
 
@@ -426,8 +445,12 @@ class DatabaseQuery(object):
 				) and not self.group_by)
 
 			if not group_function_without_group_by:
-				args.order_by = "`tab{0}`.`{1}` {2}".format(self.doctype,
-					meta.get("sort_field") or "modified", meta.get("sort_order") or "desc")
+				sort_field = sort_order = None
+				if meta.sort_field:
+					sort_field = meta.sort_field
+					sort_order = meta.sort_order
+
+				args.order_by = "`tab{0}`.`{1}` {2}".format(self.doctype, sort_field or "modified", sort_order or "desc")
 
 				# draft docs always on top
 				if meta.is_submittable:
@@ -446,3 +469,30 @@ class DatabaseQuery(object):
 			return 'limit %s, %s' % (self.limit_start, self.limit_page_length)
 		else:
 			return ''
+
+	def add_comment_count(self, result):
+		for r in result:
+			if not r.name:
+				continue
+
+			if "_comments" in r:
+				comment_count = len(json.loads(r._comments or "[]"))
+			else:
+				comment_count = cint(frappe.db.get_value("Communication",
+					filters={
+						"communication_type": "Comment",
+						"reference_doctype": self.doctype,
+						"reference_name": r.name,
+						"comment_type": "Comment"
+					},
+					fieldname="count(name)"))
+
+			communication_count = cint(frappe.db.get_value("Communication",
+				filters={
+					"communication_type": "Communication",
+					"reference_doctype": self.doctype,
+					"reference_name": r.name
+				},
+				fieldname="count(name)"))
+
+			r._comment_count = comment_count + communication_count

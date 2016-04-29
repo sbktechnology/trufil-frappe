@@ -15,6 +15,7 @@ from frappe.model.db_schema import DbManager
 from frappe.model.sync import sync_for
 from frappe.utils.fixtures import sync_fixtures
 from frappe.website import render, statics
+from frappe.desk.doctype.desktop_icon.desktop_icon import sync_from_app
 
 def install_db(root_login="root", root_password=None, db_name=None, source_sql=None,
 	admin_password=None, verbose=True, force=0, site_config=None, reinstall=False):
@@ -101,7 +102,7 @@ def install_app(name, verbose=False, set_as_patched=True):
 	frappe.flags.in_install = name
 	frappe.clear_cache()
 
-	if name not in frappe.get_all_apps(with_frappe=True):
+	if name not in frappe.get_all_apps():
 		raise Exception("App not in apps.txt")
 
 	if name in installed_apps:
@@ -114,13 +115,16 @@ def install_app(name, verbose=False, set_as_patched=True):
 		frappe.only_for("System Manager")
 
 	for before_install in app_hooks.before_install or []:
-		frappe.get_attr(before_install)()
+		out = frappe.get_attr(before_install)()
+		if out==False:
+			return
 
 	if name != "frappe":
 		add_module_defs(name)
 
 	sync_for(name, force=True, sync_everything=True, verbose=verbose)
 
+	sync_from_app(name)
 	add_to_installed_apps(name)
 
 	if set_as_patched:
@@ -163,6 +167,8 @@ def remove_app(app_name, dry_run=False):
 	print "Backing up..."
 	scheduled_backup(ignore_files=True)
 
+	drop_doctypes = []
+
 	# remove modules, doctypes, roles
 	for module_name in frappe.get_module_list(app_name):
 		for doctype in frappe.get_list("DocType", filters={"module": module_name},
@@ -171,15 +177,26 @@ def remove_app(app_name, dry_run=False):
 			# drop table
 
 			if not dry_run:
-				if not doctype.issingle:
-					frappe.db.sql("drop table `tab{0}`".format(doctype.name))
 				frappe.delete_doc("DocType", doctype.name)
+
+				if not doctype.issingle:
+					drop_doctypes.append(doctype.name)
 
 		print "removing Module {0}...".format(module_name)
 		if not dry_run:
 			frappe.delete_doc("Module Def", module_name)
 
+	# delete desktop icons
+	frappe.db.sql('delete from `tabDesktop Icon` where app=%s', app_name)
+
 	remove_from_installed_apps(app_name)
+
+	if not dry_run:
+		# drop tables after a commit
+		frappe.db.commit()
+
+		for doctype in set(drop_doctypes):
+			frappe.db.sql("drop table `tab{0}`".format(doctype))
 
 def post_install(rebuild_website=False):
 	if rebuild_website:
@@ -197,7 +214,7 @@ def set_all_patches_as_completed(app):
 			frappe.get_doc({
 				"doctype": "Patch Log",
 				"patch": patch
-			}).insert()
+			}).insert(ignore_permissions=True)
 		frappe.db.commit()
 
 def init_singles():
@@ -273,6 +290,7 @@ def make_site_dirs():
 	for dir_path in (
 			os.path.join(site_private_path, 'backups'),
 			os.path.join(site_public_path, 'files'),
+			os.path.join(site_private_path, 'files'),
 			os.path.join(frappe.local.site_path, 'task-logs')):
 		if not os.path.exists(dir_path):
 			os.makedirs(dir_path)

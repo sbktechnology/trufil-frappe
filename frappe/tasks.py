@@ -6,6 +6,7 @@ import frappe
 from frappe.utils.scheduler import enqueue_events
 from frappe.celery_app import get_celery, celery_task, task_logger, LONGJOBS_PREFIX, ASYNC_TASKS_PREFIX
 from frappe.utils import get_sites
+from frappe.utils.error import make_error_snapshot
 from frappe.utils.file_lock import create_lock, delete_lock
 from frappe.handler import execute_cmd
 from frappe.async import set_task_status, END_LINE, get_std_streams
@@ -13,6 +14,8 @@ from frappe.utils.scheduler import log
 import frappe.utils.response
 import sys
 import time
+import json
+import os
 import MySQLdb
 
 @celery_task()
@@ -54,10 +57,15 @@ def sync_worker(app, worker, prefix=''):
 	required_queues = set(get_required_queues(app, prefix=prefix))
 	to_add = required_queues - active_queues
 	to_remove = active_queues - required_queues
+
 	for queue in to_add:
+		if is_site_in_maintenance_mode(queue, prefix):
+			continue
+
 		app.control.broadcast('add_consumer', arguments={
 				'queue': queue
 		}, reply=True, destination=[worker])
+
 	for queue in to_remove:
 		app.control.broadcast('cancel_consumer', arguments={
 				'queue': queue
@@ -75,6 +83,23 @@ def get_required_queues(app, prefix=''):
 		ret.append('{}{}'.format(prefix, site))
 	ret.append(app.conf['CELERY_DEFAULT_QUEUE'])
 	return ret
+
+def is_site_in_maintenance_mode(queue, prefix):
+	# check if site is in maintenance mode
+	site = queue.replace(prefix, "")
+	try:
+		frappe.init(site=site)
+		if not frappe.local.conf.db_name or frappe.local.conf.maintenance_mode or frappe.conf.disable_scheduler:
+			# don't add site if in maintenance mode
+			return True
+
+	except frappe.IncorrectSitePath:
+		return True
+
+	finally:
+		frappe.destroy()
+
+	return False
 
 @celery_task()
 def scheduler_task(site, event, handler, now=False):
@@ -114,7 +139,7 @@ def enqueue_scheduler_events():
 def enqueue_events_for_site(site):
 	try:
 		frappe.init(site=site)
-		if frappe.local.conf.maintenance_mode:
+		if frappe.local.conf.maintenance_mode or frappe.conf.disable_scheduler:
 			return
 		frappe.connect(site=site)
 		enqueue_events(site)
@@ -186,12 +211,17 @@ def run_async_task(self, site=None, user=None, cmd=None, form_dict=None, hijack_
 
 @celery_task()
 def sendmail(site, communication_name, print_html=None, print_format=None, attachments=None,
-	recipients=None, cc=None, lang=None):
+	recipients=None, cc=None, lang=None, session=None):
 	try:
 		frappe.connect(site=site)
 
 		if lang:
 			frappe.local.lang = lang
+
+		if session:
+			# hack to enable access to private files in PDF
+			session['data'] = frappe._dict(session['data'])
+			frappe.local.session.update(session)
 
 		# upto 3 retries
 		for i in xrange(3):
@@ -222,7 +252,7 @@ def sendmail(site, communication_name, print_html=None, print_format=None, attac
 			"cc": cc,
 			"lang": lang
 		}))
-		task_logger.warn(traceback)
+		task_logger.error(traceback)
 		raise
 
 	else:
@@ -230,3 +260,4 @@ def sendmail(site, communication_name, print_html=None, print_format=None, attac
 
 	finally:
 		frappe.destroy()
+

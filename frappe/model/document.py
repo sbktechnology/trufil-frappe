@@ -9,6 +9,7 @@ from frappe.model.base_document import BaseDocument, get_controller
 from frappe.model.naming import set_new_name
 from werkzeug.exceptions import NotFound, Forbidden
 import hashlib, json
+from frappe.model import optional_fields
 
 # once_only validation
 # methods
@@ -210,6 +211,10 @@ class Document(BaseDocument):
 		self.run_post_save_methods()
 		self.flags.in_insert = False
 
+		# delete __islocal
+		if hasattr(self, "__islocal"):
+			delattr(self, "__islocal")
+
 		return self
 
 	def save(self, ignore_permissions=None):
@@ -338,12 +343,19 @@ class Document(BaseDocument):
 		self._validate_selects()
 		self._validate_constants()
 		self._validate_length()
+		self._sanitize_content()
 
 		children = self.get_all_children()
 		for d in children:
 			d._validate_selects()
 			d._validate_constants()
 			d._validate_length()
+			d._sanitize_content()
+
+		if self.is_new():
+			# don't set fields like _assign, _comments for new doc
+			for fieldname in optional_fields:
+				self.set(fieldname, None)
 
 		# extract images after validations to save processing if some validation error is raised
 		self._extract_images_from_text_editor()
@@ -369,14 +381,30 @@ class Document(BaseDocument):
 					d.reset_values_if_no_permlevel_access(has_access_to, high_permlevel_fields)
 
 	def get_permlevel_access(self):
-		user_roles = frappe.get_roles()
-		has_access_to = []
-		for perm in self.meta.permissions:
-			if perm.role in user_roles and perm.permlevel > 0 and perm.write:
-				if perm.permlevel not in has_access_to:
-					has_access_to.append(perm.permlevel)
+		if not hasattr(self, "_has_access_to"):
+			user_roles = frappe.get_roles()
+			self._has_access_to = []
+			for perm in self.get_permissions():
+				if perm.role in user_roles and perm.permlevel > 0 and perm.write:
+					if perm.permlevel not in self._has_access_to:
+						self._has_access_to.append(perm.permlevel)
 
-		return has_access_to
+		return self._has_access_to
+
+	def has_permlevel_access_to(self, fieldname, df=None):
+		if not df:
+			df = self.meta.get_field(fieldname)
+
+		return df.permlevel in self.get_permlevel_access()
+
+	def get_permissions(self):
+		if self.meta.istable:
+			# use parent permissions
+			permissions = frappe.get_meta(self.parenttype).permissions
+		else:
+			permissions = self.meta.permissions
+
+		return permissions
 
 	def _set_defaults(self):
 		if frappe.flags.in_import:
@@ -618,6 +646,7 @@ class Document(BaseDocument):
 		elif self._action=="update_after_submit":
 			self.run_method("on_update_after_submit")
 
+		self.update_timeline_doc()
 		self.clear_cache()
 		self.notify_update()
 
@@ -649,11 +678,11 @@ class Document(BaseDocument):
 	def notify_update(self):
 		"""Publish realtime that the current document is modified"""
 		frappe.publish_realtime("doc_update", {"modified": self.modified, "doctype": self.doctype, "name": self.name},
-			doctype=self.doctype, docname=self.name)
+			doctype=self.doctype, docname=self.name, after_commit=True)
 
 		if not self.meta.get("read_only") and not self.meta.get("issingle") and \
 			not self.meta.get("istable"):
-			frappe.publish_realtime("list_update", {"doctype": self.doctype})
+			frappe.publish_realtime("list_update", {"doctype": self.doctype}, after_commit=True)
 
 
 	def check_no_back_links_exist(self):
@@ -764,17 +793,21 @@ class Document(BaseDocument):
 		"""Returns Desk URL for this document. `/desk#Form/{doctype}/{name}`"""
 		return "/desk#Form/{doctype}/{name}".format(doctype=self.doctype, name=self.name)
 
-	def add_comment(self, comment_type, text=None, comment_by=None):
+	def add_comment(self, comment_type, text=None, comment_by=None, link_doctype=None, link_name=None):
 		"""Add a comment to this document.
 
-		:param comment_type: e.g. `Comment`. See Comment for more info."""
+		:param comment_type: e.g. `Comment`. See Communication for more info."""
+
 		comment = frappe.get_doc({
-			"doctype":"Comment",
-			"comment_by": comment_by or frappe.session.user,
+			"doctype":"Communication",
+			"communication_type": "Comment",
+			"sender": comment_by or frappe.session.user,
 			"comment_type": comment_type,
-			"comment_doctype": self.doctype,
-			"comment_docname": self.name,
-			"comment": text or _(comment_type)
+			"reference_doctype": self.doctype,
+			"reference_name": self.name,
+			"content": text or _(comment_type),
+			"link_doctype": link_doctype,
+			"link_name": link_name
 		}).insert(ignore_permissions=True)
 		return comment
 
@@ -782,10 +815,10 @@ class Document(BaseDocument):
 		"""Returns signature (hash) for private URL."""
 		return hashlib.sha224(get_datetime_str(self.creation)).hexdigest()
 
-	def get_starred_by(self):
-		starred_by = getattr(self, "_starred_by", None)
-		if starred_by:
-			return json.loads(starred_by)
+	def get_liked_by(self):
+		liked_by = getattr(self, "_liked_by", None)
+		if liked_by:
+			return json.loads(liked_by)
 		else:
 			return []
 
@@ -793,3 +826,27 @@ class Document(BaseDocument):
 		if not self.get("__onload"):
 			self.set("__onload", {})
 		self.get("__onload")[key] = value
+
+	def update_timeline_doc(self):
+		if frappe.flags.in_install or not self.meta.get("timeline_field"):
+			return
+
+		timeline_doctype = self.meta.get_link_doctype(self.meta.timeline_field)
+		timeline_name = self.get(self.meta.timeline_field)
+
+		if not (timeline_doctype and timeline_name):
+			return
+
+		# update timeline doc in communication if it is different than current timeline doc
+		frappe.db.sql("""update `tabCommunication`
+			set timeline_doctype=%(timeline_doctype)s, timeline_name=%(timeline_name)s
+			where
+				reference_doctype=%(doctype)s and reference_name=%(name)s
+				and (timeline_doctype is null or timeline_doctype != %(timeline_doctype)s
+					or timeline_name is null or timeline_name != %(timeline_name)s)""",
+				{
+					"doctype": self.doctype,
+					"name": self.name,
+					"timeline_doctype": timeline_doctype,
+					"timeline_name": timeline_name
+				})

@@ -44,7 +44,7 @@ frappe.ui.form.Dashboard = Class.extend({
 			<div class="alert-badge">\
 				<a class="badge-link h6 text-muted">%(label)s\
 				<span class="badge" style="margin-left: 10px; font-size: 12px;">-</span></a>\
-			</div></div>', {label:label, icon: frappe.boot.doctype_icons[doctype]}))
+			</div></div>', {label:label}))
 				.appendTo(this.body)
 
 		badge.find(".badge-link").click(onclick);
@@ -91,7 +91,7 @@ frappe.ui.form.Dashboard = Class.extend({
 		if(!progress_area.length) {
 			progress_area = $('<div class="progress-area" style="margin-top: 10px">').appendTo(this.body);
 		}
-		var progress_chart = $('<div class="progress-chart" title="'+title+'"></div>')
+		var progress_chart = $('<div class="progress-chart" title="'+(title || '')+'"></div>')
 			.appendTo(progress_area);
 
 		var n_charts = progress_area.find(".progress-chart").length,

@@ -49,7 +49,7 @@ def get_app_listing():
 	for app in os.listdir(apps_listing_dir):
 		if app.endswith(".json"):
 			with open(os.path.join(apps_listing_dir, app)) as f:
-				out[app] = frappe._dict(json.load(f))
+				out[app[:-5]] = frappe._dict(json.load(f))
 	return out
 
 @frappe.whitelist()
@@ -74,22 +74,22 @@ def install_app(name):
 		frappe.throw(_("You cannot install this app"))
 
 	frappe.publish_realtime("install_app_progress", {"status": _("Installing App {0}").format(name)},
-		user=frappe.session.user, now=True)
+		user=frappe.session.user)
 
 	frappe.installer.install_app(name)
 
 	frappe.publish_realtime("install_app_progress", {"status": _("{0} Installed").format(name)},
-		user=frappe.session.user, now=True)
+		user=frappe.session.user)
 
 def get_app(name):
 	"""Get app using git clone and install it in bench environment"""
 	app_listing = get_app_listing()
 	if name not in app_listing:
-		frappe.throw(_("Unknown app"))
+		frappe.throw(_("Unknown app {0}").format(name))
 		raise frappe.ValidationError
 
 	frappe.publish_realtime("install_app_progress", {"status": _("Downloading App {0}").format(name)},
-		user=frappe.session.user, now=True)
+		user=frappe.session.user)
 
 	args = [find_executable('bench'), 'get-app', name, app_listing[name]['repo_url']]
 

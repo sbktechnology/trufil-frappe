@@ -70,7 +70,7 @@ $.extend(frappe.model, {
 
 					doc[f.fieldname] = v;
 					updated.push(f.fieldname);
-				} else if(f.fieldtype == "Select" && f.options
+				} else if(f.fieldtype == "Select" && f.options && typeof f.options === 'string'
 					&& !in_list(["[Select]", "Loading..."], f.options)) {
 						doc[f.fieldname] = f.options.split("\n")[0];
 				}
@@ -101,7 +101,7 @@ $.extend(frappe.model, {
 
 			// is this user default also allowed as per user permissions?
 			if (is_allowed_user_default) {
-				return frappe.defaults.get_user_default(df.fieldname);
+				return user_default;
 			}
 		}
 
@@ -125,7 +125,7 @@ $.extend(frappe.model, {
 				var is_allowed_boot_doc = !has_user_permissions || user_permissions[df.options].indexOf(boot_doc)!==-1;
 
 				if (is_allowed_boot_doc) {
-					return frappe.model.get_default_from_boot_docs(df, doc, parent_doc);
+					return boot_doc;
 				}
 			} else if (df.fieldname===meta.title_field) {
 				// ignore defaults for title field

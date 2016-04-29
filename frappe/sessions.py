@@ -17,7 +17,6 @@ import frappe.defaults
 import frappe.translate
 from frappe.utils.change_log import get_change_log
 import redis
-import os
 from urllib import unquote
 
 @frappe.whitelist()
@@ -32,7 +31,7 @@ def clear_cache(user=None):
 	cache = frappe.cache()
 
 	groups = ("bootinfo", "user_recent", "user_roles", "user_doc", "lang",
-		"defaults", "user_permissions", "roles", "home_page", "linked_with")
+		"defaults", "user_permissions", "roles", "home_page", "linked_with", "desktop_icons")
 
 	if user:
 		for name in groups:
@@ -48,19 +47,21 @@ def clear_cache(user=None):
 def clear_global_cache():
 	frappe.model.meta.clear_cache()
 	frappe.cache().delete_value(["app_hooks", "installed_apps",
-		"app_modules", "module_app", "time_zone", "notification_config"])
+		"app_modules", "module_app", "notification_config", 'system_settings'])
 	frappe.setup_module_map()
 
-def clear_sessions(user=None, keep_current=False):
+def clear_sessions(user=None, keep_current=False, device=None):
 	if not user:
 		user = frappe.session.user
 
-	for sid in frappe.db.sql("""select sid from tabSessions where user=%s and device=%s""",
-		(user, frappe.session.data.device or "desktop")):
-		if keep_current and frappe.session.sid==sid[0]:
+	if not device:
+		device = frappe.session.data.device or "desktop"
+
+	for sid in frappe.db.sql_list("""select sid from tabSessions where user=%s and device=%s""", (user, device)):
+		if keep_current and frappe.session.sid==sid:
 			continue
 		else:
-			delete_session(sid[0])
+			delete_session(sid)
 
 def delete_session(sid=None, user=None):
 	if not user:
@@ -126,7 +127,6 @@ def get():
 		frappe.get_attr(hook)(bootinfo=bootinfo)
 
 	bootinfo["lang"] = frappe.translate.get_user_lang()
-	bootinfo["dev_server"] = os.environ.get('DEV_SERVER', False)
 	bootinfo["disable_async"] = frappe.conf.disable_async
 
 	return bootinfo
@@ -146,7 +146,7 @@ def generate_csrf_token():
 	# and it leads to invalid request in the current tab
 	frappe.publish_realtime(event="csrf_generated",
 		message={"sid": frappe.local.session.sid, "csrf_token": frappe.local.session.data.csrf_token},
-		user=frappe.session.user)
+		user=frappe.session.user, after_commit=True)
 
 class Session:
 	def __init__(self, user, resume=False, full_name=None, user_type=None):
